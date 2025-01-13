@@ -1,0 +1,14 @@
+[Unit]
+Description=DragonSync Service
+After=network.target
+
+[Service]
+Type=simple
+User=dragon
+WorkingDirectory=/home/dragon/WarDragon/DragonSync
+ExecStart=/usr/bin/python3 /home/dragon/WarDragon/DragonSync/dragonsync.py -c config.ini
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
