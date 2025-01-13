@@ -292,8 +292,8 @@ def zmq_to_cot(
                     # ESP32 format: single dictionary
                     if 'Basic ID' in message:
                         id_type = message['Basic ID'].get('id_type')
-                        drone_info['mac'] = item['Basic ID'].get('MAC')
-                        drone_info['rssi'] = item['Basic ID'].get('RSSI')
+                        drone_info['mac'] = message['Basic ID'].get('MAC')
+                        drone_info['rssi'] = message['Basic ID'].get('RSSI')
                         if id_type == 'Serial Number (ANSI/CTA-2063-A)' and 'id' not in drone_info:
                             drone_info['id'] = message['Basic ID'].get('id', 'unknown')
                             logger.debug(f"Parsed Serial Number ID: {drone_info['id']}")
@@ -522,3 +522,4 @@ if __name__ == "__main__":
         inactivity_timeout=config["inactivity_timeout"],
         multicast_interface=config["tak_multicast_interface"]
     )
+    
