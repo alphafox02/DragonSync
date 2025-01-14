@@ -22,7 +22,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
-
 import time
 from collections import deque
 from typing import Optional
@@ -50,7 +49,6 @@ class DroneManager:
         self.drone_dict = {}
         self.rate_limit = rate_limit
         self.inactivity_timeout = inactivity_timeout
-        self.last_sent_time = 0.0
         self.cot_messenger = cot_messenger
 
     def update_or_add_drone(self, drone_id: str, drone_data: Drone):
@@ -62,42 +60,46 @@ class DroneManager:
                 logger.debug(f"Removed oldest drone: {oldest_drone_id}")
             self.drones.append(drone_id)
             self.drone_dict[drone_id] = drone_data
+            # Initialize attributes for new drones
+            drone_data.last_sent_time = 0  # Track last time an update was sent
+            drone_data.final_message_sent = False  # Track if the final stale message was sent
             logger.debug(f"Added new drone: {drone_id}")
         else:
-            self.drone_dict[drone_id] = drone_data
+            # Update existing drone data
+            self.drone_dict[drone_id].last_update_time = drone_data.last_update_time
             logger.debug(f"Updated drone: {drone_id}")
 
     def send_updates(self):
-    """Sends updates to the TAK server or multicast address."""
-    current_time = time.time()
-    drones_to_remove = []
+        """Sends updates to the TAK server or multicast address."""
+        current_time = time.time()
+        drones_to_remove = []
 
-    for drone_id in list(self.drones):
-        drone = self.drone_dict[drone_id]
-        time_since_update = current_time - drone.last_update_time
+        for drone_id in list(self.drones):
+            drone = self.drone_dict[drone_id]
+            time_since_update = current_time - drone.last_update_time
 
-        # Remove drones that have been inactive beyond the timeout
-        if time_since_update > self.inactivity_timeout:
-            # Final stale CoT message
-            if not drone.final_message_sent:
-                cot_xml = drone.to_cot_xml(stale_offset=0)  # Set stale time to current time
+            # Remove drones that have been inactive beyond the timeout
+            if time_since_update > self.inactivity_timeout:
+                # Send the final stale CoT message once
+                if not drone.final_message_sent:
+                    cot_xml = drone.to_cot_xml(stale_offset=0)  # Set stale time to current time
+                    if self.cot_messenger:
+                        self.cot_messenger.send_cot(cot_xml)
+                    drones_to_remove.append(drone_id)
+                    drone.final_message_sent = True
+                    logger.debug(f"Drone {drone_id} inactive for {time_since_update:.2f}s. Sent final CoT message.")
+                continue
+
+            # Send updates only if the rate limit per drone allows
+            if current_time - drone.last_sent_time >= self.rate_limit:
+                cot_xml = drone.to_cot_xml(stale_offset=self.inactivity_timeout - time_since_update)
                 if self.cot_messenger:
                     self.cot_messenger.send_cot(cot_xml)
-                drones_to_remove.append(drone_id)
-                drone.final_message_sent = True
-                logger.debug(f"Drone {drone_id} inactive for {time_since_update:.2f}s. Sent final CoT message.")
-            continue
+                    drone.last_sent_time = current_time  # Track last sent time per drone
+                    logger.debug(f"Sent CoT update for drone {drone_id} after {time_since_update:.2f}s.")
 
-        # Send updates only if the rate limit per drone allows
-        if current_time - drone.last_sent_time >= self.rate_limit:
-            cot_xml = drone.to_cot_xml(stale_offset=self.inactivity_timeout - time_since_update)
-            if self.cot_messenger:
-                self.cot_messenger.send_cot(cot_xml)
-                drone.last_sent_time = current_time  # Track last sent time per drone
-                logger.debug(f"Sent CoT update for drone {drone_id} after {time_since_update:.2f}s.")
-
-    # Remove inactive drones after sending the final stale message
-    for drone_id in drones_to_remove:
-        self.drones.remove(drone_id)
-        del self.drone_dict[drone_id]
-        logger.debug(f"Removed drone: {drone_id}")
+        # Remove inactive drones after sending the final stale message
+        for drone_id in drones_to_remove:
+            self.drones.remove(drone_id)
+            del self.drone_dict[drone_id]
+            logger.debug(f"Removed drone: {drone_id}")
