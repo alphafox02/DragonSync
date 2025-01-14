@@ -127,10 +127,10 @@ class DroneManager:
                 if self.cot_messenger:
                     self.cot_messenger.send_cot(cot_xml)
                 logger.debug("Sent CoT message from queue.")
+                self.message_queue.task_done()  # Only call task_done if get() succeeded
             except Exception as e:
                 logger.error(f"Error sending CoT message: {e}")
-            finally:
-                self.message_queue.task_done()
+                # Do not call task_done() here, as no valid task was processed
 
     def stop(self):
         """Stops the background sender thread."""
