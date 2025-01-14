@@ -47,6 +47,7 @@ class Drone:
         self.pilot_lon = pilot_lon
         self.description = description
         self.last_update_time = time.time()
+        self.last_sent_time = 0.0  # Track last time an update was sent
 
     def update(self, lat: float, lon: float, speed: float, vspeed: float, alt: float,
                height: float, pilot_lat: float, pilot_lon: float, description: str, mac: str, rssi: int):
