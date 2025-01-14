@@ -60,13 +60,15 @@ class DroneManager:
                 logger.debug(f"Removed oldest drone: {oldest_drone_id}")
             self.drones.append(drone_id)
             self.drone_dict[drone_id] = drone_data
-            # Initialize attributes for new drones
-            drone_data.last_sent_time = 0  # Track last time an update was sent
-            drone_data.final_message_sent = False  # Track if the final stale message was sent
+            drone_data.last_sent_time = 0.0  # Initialize last sent time for the new drone
             logger.debug(f"Added new drone: {drone_id}")
         else:
-            # Update existing drone data
-            self.drone_dict[drone_id].last_update_time = drone_data.last_update_time
+            self.drone_dict[drone_id].update(
+                lat=drone_data.lat, lon=drone_data.lon, speed=drone_data.speed,
+                vspeed=drone_data.vspeed, alt=drone_data.alt, height=drone_data.height,
+                pilot_lat=drone_data.pilot_lat, pilot_lon=drone_data.pilot_lon,
+                description=drone_data.description, mac=drone_data.mac, rssi=drone_data.rssi
+            )
             logger.debug(f"Updated drone: {drone_id}")
 
     def send_updates(self):
@@ -80,14 +82,12 @@ class DroneManager:
 
             # Remove drones that have been inactive beyond the timeout
             if time_since_update > self.inactivity_timeout:
-                # Send the final stale CoT message once
-                if not drone.final_message_sent:
-                    cot_xml = drone.to_cot_xml(stale_offset=0)  # Set stale time to current time
-                    if self.cot_messenger:
-                        self.cot_messenger.send_cot(cot_xml)
-                    drones_to_remove.append(drone_id)
-                    drone.final_message_sent = True
-                    logger.debug(f"Drone {drone_id} inactive for {time_since_update:.2f}s. Sent final CoT message.")
+                # Final stale CoT message
+                cot_xml = drone.to_cot_xml(stale_offset=0)  # Set stale time to current time
+                if self.cot_messenger:
+                    self.cot_messenger.send_cot(cot_xml)
+                drones_to_remove.append(drone_id)
+                logger.debug(f"Drone {drone_id} inactive for {time_since_update:.2f}s. Sent final CoT message.")
                 continue
 
             # Send updates only if the rate limit per drone allows
