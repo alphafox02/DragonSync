@@ -47,8 +47,9 @@ class DroneManager:
         """
         self.drones = deque(maxlen=max_drones)
         self.drone_dict = {}
-        self.rate_limit = rate_limit
-        self.inactivity_timeout = inactivity_timeout
+        self.rate_limit = rate_limit  # Active drone update frequency
+        self.inactivity_timeout = inactivity_timeout  # Time before a drone is considered stale
+        self.keep_alive_interval = 10.0  # Interval for sending keep-alive CoT updates for inactive drones
         self.cot_messenger = cot_messenger
 
     def update_or_add_drone(self, drone_id: str, drone_data: Drone):
@@ -90,13 +91,22 @@ class DroneManager:
                 logger.debug(f"Drone {drone_id} inactive for {time_since_update:.2f}s. Sent final CoT message.")
                 continue
 
-            # Send updates only if the rate limit per drone allows
-            if current_time - drone.last_sent_time >= self.rate_limit:
-                cot_xml = drone.to_cot_xml(stale_offset=self.inactivity_timeout - time_since_update)
-                if self.cot_messenger:
-                    self.cot_messenger.send_cot(cot_xml)
-                    drone.last_sent_time = current_time  # Track last sent time per drone
-                    logger.debug(f"Sent CoT update for drone {drone_id} after {time_since_update:.2f}s.")
+            # Active drone: send updates based on the rate limit
+            if time_since_update < self.rate_limit:
+                if current_time - drone.last_sent_time >= self.rate_limit:
+                    cot_xml = drone.to_cot_xml(stale_offset=self.inactivity_timeout - time_since_update)
+                    if self.cot_messenger:
+                        self.cot_messenger.send_cot(cot_xml)
+                        drone.last_sent_time = current_time
+                        logger.debug(f"Sent CoT update for active drone {drone_id} after {time_since_update:.2f}s.")
+            else:
+                # Inactive-but-not-stale drone: send less frequent keep-alive updates
+                if current_time - drone.last_sent_time >= self.keep_alive_interval:
+                    cot_xml = drone.to_cot_xml(stale_offset=self.inactivity_timeout - time_since_update)
+                    if self.cot_messenger:
+                        self.cot_messenger.send_cot(cot_xml)
+                        drone.last_sent_time = current_time
+                        logger.debug(f"Sent keep-alive CoT update for inactive drone {drone_id}.")
 
         # Remove inactive drones after sending the final stale message
         for drone_id in drones_to_remove:
