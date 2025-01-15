@@ -23,9 +23,7 @@ SOFTWARE.
 """
 
 import time
-import threading
 from collections import deque
-from queue import Queue
 from typing import Optional
 import logging
 
@@ -41,7 +39,7 @@ class DroneManager:
                  cot_messenger: Optional[CotMessenger] = None):
         """
         Initializes the DroneManager.
-
+        
         :param max_drones: Maximum number of drones to track.
         :param rate_limit: Minimum interval between sending updates (in seconds).
         :param inactivity_timeout: Time after which a drone is considered inactive (in seconds).
@@ -53,12 +51,6 @@ class DroneManager:
         self.inactivity_timeout = inactivity_timeout  # Time before a drone is considered stale
         self.keep_alive_interval = 10.0  # Interval for sending keep-alive CoT updates for inactive drones
         self.cot_messenger = cot_messenger
-        self.message_queue = Queue()  # Queue for CoT messages
-
-        # Start a background thread for sending messages
-        self.stop_thread = threading.Event()
-        self.sender_thread = threading.Thread(target=self._send_messages_from_queue, daemon=True)
-        self.sender_thread.start()
 
     def update_or_add_drone(self, drone_id: str, drone_data: Drone):
         """Updates an existing drone or adds a new one to the collection."""
@@ -69,7 +61,7 @@ class DroneManager:
                 logger.debug(f"Removed oldest drone: {oldest_drone_id}")
             self.drones.append(drone_id)
             self.drone_dict[drone_id] = drone_data
-            drone_data.last_sent_time = time.time()  # Initialize with current time
+            drone_data.last_sent_time = 0.0  # Initialize last sent time for the new drone
             logger.debug(f"Added new drone: {drone_id}")
         else:
             self.drone_dict[drone_id].update(
@@ -81,8 +73,8 @@ class DroneManager:
             logger.debug(f"Updated drone: {drone_id}")
 
     def send_updates(self):
-        """Generates CoT messages and enqueues them for sending."""
-        current_time = time.time()  # Use current time in seconds
+        """Sends updates to the TAK server or multicast address."""
+        current_time = time.time()
         drones_to_remove = []
 
         for drone_id in list(self.drones):
@@ -91,49 +83,33 @@ class DroneManager:
 
             # Remove drones that have been inactive beyond the timeout
             if time_since_update > self.inactivity_timeout:
-                cot_xml = drone.to_cot_xml(stale_offset=0)  # Final stale CoT message
-                self.message_queue.put(cot_xml)  # Enqueue the message
+                # Final stale CoT message
+                cot_xml = drone.to_cot_xml(stale_offset=0)  # Set stale time to current time
+                if self.cot_messenger:
+                    self.cot_messenger.send_cot(cot_xml)
                 drones_to_remove.append(drone_id)
-                logger.debug(f"Drone {drone_id} inactive for {time_since_update:.2f}s. Enqueued final CoT message.")
+                logger.debug(f"Drone {drone_id} inactive for {time_since_update:.2f}s. Sent final CoT message.")
                 continue
 
             # Active drone: send updates based on the rate limit
             if time_since_update < self.rate_limit:
                 if current_time - drone.last_sent_time >= self.rate_limit:
                     cot_xml = drone.to_cot_xml(stale_offset=self.inactivity_timeout - time_since_update)
-                    self.message_queue.put(cot_xml)  # Enqueue the message
-                    drone.last_sent_time = current_time
-                    logger.debug(f"Enqueued CoT update for active drone {drone_id} after {time_since_update:.2f}s.")
+                    if self.cot_messenger:
+                        self.cot_messenger.send_cot(cot_xml)
+                        drone.last_sent_time = current_time
+                        logger.debug(f"Sent CoT update for active drone {drone_id} after {time_since_update:.2f}s.")
             else:
                 # Inactive-but-not-stale drone: send less frequent keep-alive updates
                 if current_time - drone.last_sent_time >= self.keep_alive_interval:
                     cot_xml = drone.to_cot_xml(stale_offset=self.inactivity_timeout - time_since_update)
-                    self.message_queue.put(cot_xml)  # Enqueue the message
-                    drone.last_sent_time = current_time
-                    logger.debug(f"Enqueued keep-alive CoT update for inactive drone {drone_id}.")
+                    if self.cot_messenger:
+                        self.cot_messenger.send_cot(cot_xml)
+                        drone.last_sent_time = current_time
+                        logger.debug(f"Sent keep-alive CoT update for inactive drone {drone_id}.")
 
         # Remove inactive drones after sending the final stale message
         for drone_id in drones_to_remove:
             self.drones.remove(drone_id)
             del self.drone_dict[drone_id]
             logger.debug(f"Removed drone: {drone_id}")
-
-    def _send_messages_from_queue(self):
-        """Background thread function that sends CoT messages from the queue."""
-        while not self.stop_thread.is_set():
-            try:
-                # Wait for a message (with timeout to allow graceful exit)
-                cot_xml = self.message_queue.get(timeout=1.0)
-                if self.cot_messenger:
-                    self.cot_messenger.send_cot(cot_xml)
-                logger.debug("Sent CoT message from queue.")
-                self.message_queue.task_done()  # Only call task_done if get() succeeded
-            except Exception as e:
-                logger.error(f"Error sending CoT message: {e}")
-                # Do not call task_done() here, as no valid task was processed
-
-    def stop(self):
-        """Stops the background sender thread."""
-        self.stop_thread.set()
-        self.sender_thread.join()
-        logger.debug("Stopped the background sender thread.")
