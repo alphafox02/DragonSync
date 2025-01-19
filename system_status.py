@@ -114,4 +114,10 @@ class SystemStatus:
             iconsetpath='34ae1613-9645-4222-a9d2-e5f243dea2865/Military/Ground_Vehicle.png'  # Use appropriate icon
         )
 
-        return etree.tostring(event, pretty_print=True, xml_declaration=True, encoding='UTF-8')
+        cot_xml_bytes = etree.tostring(event, pretty_print=True, xml_declaration=True, encoding='UTF-8')
+
+        # --- Debug Logging ---
+        # Only prints if the logger is set to DEBUG (e.g. by --debug in your main script)
+        logger.debug("SystemStatus CoT XML for '%s':\n%s", self.id, cot_xml_bytes.decode('utf-8'))
+
+        return cot_xml_bytes
