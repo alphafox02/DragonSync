@@ -371,7 +371,7 @@ def zmq_to_cot(
             if status_socket and status_socket in socks and socks[status_socket] == zmq.POLLIN:
                 logger.debug("Received a message on the status socket")
                 status_message = status_socket.recv_json()
-                logger.debug(f"Received system status JSON: {status_message}")
+                # logger.debug(f"Received system status JSON: {status_message}")
 
                 serial_number = status_message.get('serial_number', 'unknown')
                 gps_data = status_message.get('gps_data', {})
