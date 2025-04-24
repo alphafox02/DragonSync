@@ -32,7 +32,6 @@ import math
 
 logger = logging.getLogger(__name__)
 
-
 def haversine(lat1_deg: float, lon1_deg: float, lat2_deg: float, lon2_deg: float) -> float:
     """Return distance in meters between two WGS84 points."""
     EARTH_RADIUS = 6_371_000.0
@@ -137,11 +136,17 @@ class SystemStatus:
             how='m-g'
         )
 
+        # corrected point creation
         etree.SubElement(
-            etree.SubElement(event, 'point'),
+            event,
             'point',
-            lat=str(self.lat), lon=str(self.lon), hae=str(self.alt), ce='35.0', le='999999'
+            lat=str(self.lat),
+            lon=str(self.lon),
+            hae=str(self.alt),
+            ce='35.0',
+            le='999999'
         )
+
         detail = etree.SubElement(event, 'detail')
         etree.SubElement(detail, 'contact', endpoint='', phone='', callsign=self.id)
         etree.SubElement(detail, 'precisionlocation', geopointsrc='gps', altsrc='gps')
@@ -153,8 +158,7 @@ class SystemStatus:
             f"Temperature: {self.temperature}°C, Uptime: {self.uptime} s, "
             f"Pluto Temp: {self.pluto_temp}°C, Zynq Temp: {self.zynq_temp}°C"
         )
-        xml.sax.saxutils.escape(remarks)
-        etree.SubElement(detail, 'remarks').text = remarks
+        etree.SubElement(detail, 'remarks').text = xml.sax.saxutils.escape(remarks)
         etree.SubElement(detail, 'color', argb='-256')
 
         # insert track element if calculated
