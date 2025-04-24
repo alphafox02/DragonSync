@@ -580,6 +580,8 @@ def zmq_to_cot(
                 lat = get_float(gps_data.get('latitude', 0.0))
                 lon = get_float(gps_data.get('longitude', 0.0))
                 alt = get_float(gps_data.get('altitude', 0.0))
+                speed = get_float(gps_data.get('speed', 0.0))
+                track = get_float(gps_data.get('track', 0.0))
 
                 system_stats = status_message.get('system_stats', {})
                 ant_sdr_temps = status_message.get('ant_sdr_temps', {})
@@ -608,6 +610,8 @@ def zmq_to_cot(
                     lat=lat,
                     lon=lon,
                     alt=alt,
+                    speed=speed,
+                    track=track,
                     cpu_usage=cpu_usage,
                     memory_total=memory_total,
                     memory_available=memory_available,
