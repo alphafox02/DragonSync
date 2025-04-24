@@ -52,7 +52,8 @@ def get_gps_data(debug=False):
             'latitude': getattr(report, 'lat', 'N/A'),
             'longitude': getattr(report, 'lon', 'N/A'),
             'altitude': getattr(report, 'alt', 'N/A'),
-            'speed': getattr(report, 'speed', 'N/A')
+            'speed': getattr(report, 'speed', 'N/A'),
+            'track': getattr(report, 'track', 'N/A')
         }
         if debug:
             print(f"Received GPS data: {gps_info}")
@@ -68,7 +69,7 @@ def get_gps_data(debug=False):
         if debug:
             print(f"Error connecting to gpsd: {e}")
 
-    return {'latitude': 'N/A', 'longitude': 'N/A', 'altitude': 'N/A', 'speed': 'N/A'}
+    return {'latitude': 'N/A', 'longitude': 'N/A', 'altitude': 'N/A', 'speed': 'N/A', 'track': 'N/A'}
 
 
 def get_serial_number(debug=False):
