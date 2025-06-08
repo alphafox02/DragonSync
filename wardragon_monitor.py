@@ -35,9 +35,22 @@ import uuid
 import os  # Import os module
 from gps import gps, WATCH_ENABLE, WATCH_NEWSTYLE
 
+# Add global/static gps args here for use in get_gps_data
+STATIC_GPS = {'lat': None, 'lon': None, 'alt': None}
 
 def get_gps_data(debug=False):
-    """Retrieve GPS data from gpsd."""
+    """Retrieve GPS data from gpsd or use static values if provided."""
+    # Use static GPS if set
+    if STATIC_GPS['lat'] is not None and STATIC_GPS['lon'] is not None:
+        if debug:
+            print(f"Using static GPS: {STATIC_GPS}")
+        return {
+            'latitude': STATIC_GPS['lat'],
+            'longitude': STATIC_GPS['lon'],
+            'altitude': STATIC_GPS['alt'] if STATIC_GPS['alt'] is not None else 'N/A',
+            'speed': 'N/A',
+            'track': 'N/A'
+        }
     try:
         gpsd = gps(mode=WATCH_ENABLE | WATCH_NEWSTYLE)
 
@@ -276,10 +289,16 @@ def signal_handler(sig, frame):
     sys.exit(0)
 
 
-def main(host, port, interval, debug):
+def main(host, port, interval, debug, static_lat=None, static_lon=None, static_alt=None):
     """Main function to gather data and send it over ZMQ."""
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
+
+    # Set the STATIC_GPS globals if provided
+    if static_lat is not None and static_lon is not None:
+        STATIC_GPS['lat'] = static_lat
+        STATIC_GPS['lon'] = static_lon
+        STATIC_GPS['alt'] = static_alt
 
     socket = create_zmq_context(host, port) if not debug else None
 
@@ -322,6 +341,17 @@ if __name__ == "__main__":
     parser.add_argument('--zmq_port', type=int, default=4225, help='ZMQ Port')
     parser.add_argument('--interval', type=int, default=30, help='Update interval in seconds')
     parser.add_argument('-d', '--debug', action='store_true', help='Print JSON to terminal for debugging')
+    parser.add_argument('--static-lat', type=float, help='Static latitude for fixed position (overrides GPS)')
+    parser.add_argument('--static-lon', type=float, help='Static longitude for fixed position (overrides GPS)')
+    parser.add_argument('--static-alt', type=float, help='Static altitude for fixed position (optional)')
 
     args = parser.parse_args()
-    main(args.zmq_host, args.zmq_port, args.interval, args.debug)
+    main(
+        args.zmq_host,
+        args.zmq_port,
+        args.interval,
+        args.debug,
+        static_lat=args.static_lat,
+        static_lon=args.static_lon,
+        static_alt=args.static_alt
+    )
