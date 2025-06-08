@@ -35,12 +35,37 @@ import uuid
 import os  # Import os module
 from gps import gps, WATCH_ENABLE, WATCH_NEWSTYLE
 
-# Add global/static gps args here for use in get_gps_data
+import configparser  # Added for gps.ini support
+
 STATIC_GPS = {'lat': None, 'lon': None, 'alt': None}
+
+def load_gps_ini():
+    """Read static GPS settings from gps.ini if present and enabled."""
+    gps_ini = '/etc/gps.ini'
+    if not os.path.isfile(gps_ini):
+        gps_ini = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'gps.ini')
+        if not os.path.isfile(gps_ini):
+            return None
+    config = configparser.ConfigParser()
+    config.read(gps_ini)
+    section = 'gps'
+    if section not in config:
+        return None
+    try:
+        if config.get(section, 'use_static_gps').strip().lower() == 'true':
+            lat = config.getfloat(section, 'static_lat')
+            lon = config.getfloat(section, 'static_lon')
+            try:
+                alt = config.getfloat(section, 'static_alt')
+            except Exception:
+                alt = None
+            return {'lat': lat, 'lon': lon, 'alt': alt}
+    except Exception:
+        return None
+    return None
 
 def get_gps_data(debug=False):
     """Retrieve GPS data from gpsd or use static values if provided."""
-    # Use static GPS if set
     if STATIC_GPS['lat'] is not None and STATIC_GPS['lon'] is not None:
         if debug:
             print(f"Using static GPS: {STATIC_GPS}")
@@ -294,11 +319,19 @@ def main(host, port, interval, debug, static_lat=None, static_lon=None, static_a
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    # Set the STATIC_GPS globals if provided
+    # Determine static GPS settings
+    # Priority: CLI flags > gps.ini > none
+    global STATIC_GPS
     if static_lat is not None and static_lon is not None:
         STATIC_GPS['lat'] = static_lat
         STATIC_GPS['lon'] = static_lon
         STATIC_GPS['alt'] = static_alt
+    else:
+        ini_vals = load_gps_ini()
+        if ini_vals and ini_vals['lat'] is not None and ini_vals['lon'] is not None:
+            STATIC_GPS['lat'] = ini_vals['lat']
+            STATIC_GPS['lon'] = ini_vals['lon']
+            STATIC_GPS['alt'] = ini_vals['alt']
 
     socket = create_zmq_context(host, port) if not debug else None
 
