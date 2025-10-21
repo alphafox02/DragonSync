@@ -70,7 +70,7 @@ class DroneManager:
             self.drones.append(drone_id)
             self.drone_dict[drone_id] = drone_data
             drone_data.last_sent_time = 0.0
-            logger.debug(f"Added new drone: {drone_id}")
+            logger.debug(f"Added new drone: {drone_id}: {drone_data}")
         else:
             # Same as before, but now also track freq
             self.drone_dict[drone_id].update(
@@ -87,7 +87,7 @@ class DroneManager:
                 rssi=drone_data.rssi,
                 freq=getattr(drone_data, "freq", None),
             )
-            logger.debug(f"Updated drone: {drone_id}")
+            logger.debug(f"Updated drone: {drone_id}: {drone_data}")
 
     def send_updates(self):
         """Sends rate-limited CoT updates and dispatches the full Drone to sinks."""

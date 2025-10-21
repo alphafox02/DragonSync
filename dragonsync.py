@@ -345,6 +345,8 @@ def zmq_to_cot(
                         logger.debug(f"Drone id already has prefix: {drone_info['id']}")
                     drone_id = drone_info['id']
 
+                    logger.debug(f"Drone detailts for id: {drone_id} - {drone_info}")
+
                     if drone_id in drone_manager.drone_dict:
                         drone = drone_manager.drone_dict[drone_id]
                         drone.update(
@@ -534,6 +536,8 @@ def zmq_to_cot(
                 if lattice_sink is not None:
                     try:
                         lattice_sink.publish_system(status_message)
+                        #TODO: Add system_status to lattice sink system for health components
+                        logger.debug(f"Published system status to Lattice: {status_message}")
                     except Exception as e:
                         logger.warning(f"Lattice publish_system failed: {e}")
 
