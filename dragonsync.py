@@ -111,6 +111,13 @@ def setup_tls_context(tak_tls_p12: str, tak_tls_p12_pass: Optional[str], tak_tls
         logger.critical("Failed to load TAK server TLS PKCS#12: %s.", err)
         sys.exit(1)
 
+    if key is None:
+        logger.critical("PKCS#12 loaded but contains no private key (did you export a truststore instead of a client identity?).")
+        sys.exit(1)
+    if cert is None:
+        logger.critical("PKCS#12 loaded but contains no end-entity certificate (need client cert + private key).")
+        sys.exit(1)
+
     key_bytes = key.private_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PrivateFormat.TraditionalOpenSSL,
