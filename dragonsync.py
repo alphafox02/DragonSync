@@ -183,6 +183,7 @@ def zmq_to_cot(
     multicast_ttl: int = 1,
     enable_receive: bool = False,
     lattice_sink: Optional[object] = None,
+    mqtt_sink: Optional[object] = None,
     adsb_enabled=False,
     adsb_json_url=None,
     adsb_uid_prefix="adsb-",
@@ -274,41 +275,8 @@ def zmq_to_cot(
     if lattice_sink is not None:
         extra_sinks.append(lattice_sink)
 
-    # MQTT sink (optional)
-    mqtt_sink = None
-    if config.get("mqtt_enabled"):
-        if MqttSink is None:
-            logger.critical("mqtt_enabled=true but mqtt_sink.py is missing or failed to import.")
-        else:
-            try:
-                mqtt_sink = MqttSink(
-                    host=config.get("mqtt_host", "127.0.0.1"),
-                    port=int(config.get("mqtt_port", 1883)),
-                    username=(config.get("mqtt_username") or None),
-                    password=(config.get("mqtt_password") or None),
-                    tls=bool(config.get("mqtt_tls", False)),
-                    ca_file=(config.get("mqtt_ca_file") or None),
-                    certfile=(config.get("mqtt_certfile") or None),
-                    keyfile=(config.get("mqtt_keyfile") or None),
-                    tls_insecure=bool(config.get("mqtt_tls_insecure", False)),
-
-                    aggregate_topic=config.get("mqtt_topic", "wardragon/drones"),
-                    retain_state=bool(config.get("mqtt_retain", True)),
-
-                    per_drone_enabled=bool(config.get("mqtt_per_drone_enabled", False)),
-                    per_drone_base=config.get("mqtt_per_drone_base", "wardragon/drone"),
-
-                    ha_enabled=bool(config.get("mqtt_ha_enabled", False)),
-                    ha_prefix=config.get("mqtt_ha_prefix", "homeassistant"),
-                    ha_device_base=config.get("mqtt_ha_device_base", "wardragon_drone"),
-                )
-                extra_sinks.append(mqtt_sink)
-                logger.info("MQTT sink enabled (aggregate=%s, per_drone=%s, HA=%s)",
-                            config.get("mqtt_topic", "wardragon/drones"),
-                            bool(config.get("mqtt_per_drone_enabled", False)),
-                            bool(config.get("mqtt_ha_enabled", False)))
-            except Exception as e:
-                logger.exception("Failed to initialize MQTT sink: %s", e)
+    if mqtt_sink is not None:
+        extra_sinks.append(mqtt_sink)
 
     # Initialize DroneManager with CotMessenger (no legacy MQTT args)
     drone_manager = DroneManager(
@@ -800,6 +768,40 @@ if __name__ == "__main__":
         tak_tls_skip_verify=config["tak_tls_skip_verify"]
     ) if config["tak_protocol"] == 'TCP' and config["tak_tls_p12"] else None
 
+    # MQTT sink (optional)
+    mqtt_sink = None
+    try:
+        from mqtt_sink import MqttSink  # your existing helper
+    except Exception as e:
+        MqttSink = None  # keep running even if not present
+        if config.get("mqtt_enabled"):
+            logger.warning("MQTT enabled but mqtt_sink import failed: %s", e)
+
+    if config.get("mqtt_enabled") and MqttSink is not None:
+        try:
+            mqtt_sink = MqttSink(
+                host=config.get("mqtt_host", "127.0.0.1"),
+                port=int(config.get("mqtt_port", 1883)),
+                username=(config.get("mqtt_username") or None),
+                password=(config.get("mqtt_password") or None),
+                tls=bool(config.get("mqtt_tls", False)),
+                ca_file=(config.get("mqtt_ca_file") or None),
+                certfile=(config.get("mqtt_certfile") or None),
+                keyfile=(config.get("mqtt_keyfile") or None),
+                tls_insecure=bool(config.get("mqtt_tls_insecure", False)),
+                aggregate_topic=config.get("mqtt_topic", "wardragon/drones"),
+                retain_state=bool(config.get("mqtt_retain", True)),
+                per_drone_enabled=bool(config.get("mqtt_per_drone_enabled", False)),
+                per_drone_base=config.get("mqtt_per_drone_base", "wardragon/drone"),
+                ha_enabled=bool(config.get("mqtt_ha_enabled", False)),
+                ha_prefix=config.get("mqtt_ha_prefix", "homeassistant"),
+                ha_device_base=config.get("mqtt_ha_device_base", "wardragon_drone"),
+            )
+            logger.info("MQTT sink enabled.")
+        except Exception as e:
+            logger.exception("Failed to initialize MQTT sink: %s", e)
+            mqtt_sink = None
+
     # ---- Optional Lattice sink construction (import-protected) ----
     lattice_sink = None
     if config["lattice_enabled"]:
@@ -854,6 +856,7 @@ if __name__ == "__main__":
         multicast_ttl=config["multicast_ttl"],
         enable_receive=config["enable_receive"],
         lattice_sink=lattice_sink,
+        mqtt_sink=mqtt_sink,
         adsb_enabled=config["adsb_enabled"],
         adsb_json_url=config["adsb_json_url"],
         adsb_uid_prefix=config["adsb_uid_prefix"],
