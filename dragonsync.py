@@ -54,6 +54,8 @@ from manager import DroneManager
 from messaging import CotMessenger
 from utils import load_config, validate_config, get_str, get_int, get_float, get_bool
 from telemetry_parser import parse_drone_info
+from adsb_parser import parse_adsb_message
+from uat_parser import parse_uat_message
 
 UA_TYPE_MAPPING = {
     0: 'No UA type defined',
@@ -109,6 +111,13 @@ def setup_tls_context(tak_tls_p12: str, tak_tls_p12_pass: Optional[str], tak_tls
         key, cert, more_certs = pkcs12.load_key_and_certificates(p12_data, p12_pass)
     except Exception as err:
         logger.critical("Failed to load TAK server TLS PKCS#12: %s.", err)
+        sys.exit(1)
+
+    if key is None:
+        logger.critical("PKCS#12 loaded but contains no private key (did you export a truststore instead of a client identity?).")
+        sys.exit(1)
+    if cert is None:
+        logger.critical("PKCS#12 loaded but contains no end-entity certificate (need client cert + private key).")
         sys.exit(1)
 
     key_bytes = key.private_bytes(
@@ -175,6 +184,10 @@ def zmq_to_cot(
     multicast_ttl: int = 1,
     enable_receive: bool = False,
     lattice_sink: Optional[object] = None,
+    adsb_enabled: bool = False,
+    adsb_zmq_port: Optional[int] = None,
+    uat_enabled: bool = False,
+    uat_zmq_port: Optional[int] = None,
 ):
     """Main function to convert ZMQ messages to CoT and send to TAK server."""
 
@@ -193,6 +206,26 @@ def zmq_to_cot(
     else:
         status_socket = None
         logger.debug("No ZMQ status port provided. Skipping status socket setup.")
+
+    # Create ADS-B socket if enabled
+    if adsb_enabled and adsb_zmq_port:
+        adsb_socket = context.socket(zmq.SUB)
+        adsb_socket.connect(f"tcp://{zmq_host}:{adsb_zmq_port}")
+        adsb_socket.setsockopt_string(zmq.SUBSCRIBE, "")
+        logger.info(f"Connected to ADS-B ZMQ socket at tcp://{zmq_host}:{adsb_zmq_port}")
+    else:
+        adsb_socket = None
+        logger.debug("ADS-B disabled or no port provided. Skipping ADS-B socket setup.")
+
+    # Create UAT socket if enabled
+    if uat_enabled and uat_zmq_port:
+        uat_socket = context.socket(zmq.SUB)
+        uat_socket.connect(f"tcp://{zmq_host}:{uat_zmq_port}")
+        uat_socket.setsockopt_string(zmq.SUBSCRIBE, "")
+        logger.info(f"Connected to UAT ZMQ socket at tcp://{zmq_host}:{uat_zmq_port}")
+    else:
+        uat_socket = None
+        logger.debug("UAT disabled or no port provided. Skipping UAT socket setup.")
 
     # Initialize TAK clients based on protocol
     tak_client = None
@@ -304,6 +337,10 @@ def zmq_to_cot(
     poller.register(telemetry_socket, zmq.POLLIN)
     if status_socket:
         poller.register(status_socket, zmq.POLLIN)
+    if adsb_socket:
+        poller.register(adsb_socket, zmq.POLLIN)
+    if uat_socket:
+        poller.register(uat_socket, zmq.POLLIN)
 
     try:
         while True:
@@ -344,6 +381,8 @@ def zmq_to_cot(
                     else:
                         logger.debug(f"Drone id already has prefix: {drone_info['id']}")
                     drone_id = drone_info['id']
+
+                    logger.debug(f"Drone detailts for id: {drone_id} - {drone_info}")
 
                     if drone_id in drone_manager.drone_dict:
                         drone = drone_manager.drone_dict[drone_id]
@@ -474,6 +513,174 @@ def zmq_to_cot(
                     else:
                         logger.warning("CAA-only message received without a MAC. Skipping.")
 
+            # Handle ADS-B messages
+            if adsb_socket and adsb_socket in socks and socks[adsb_socket] == zmq.POLLIN:
+                try:
+                    message = adsb_socket.recv_json()
+                except ValueError as e:
+                    logger.warning(f"ADS-B JSON decode failed: {e}")
+                    continue
+                except Exception as e:
+                    logger.exception(f"ADS-B recv failed: {e}")
+                    continue
+
+                try:
+                    aircraft_info = parse_adsb_message(message)
+                except Exception as e:
+                    logger.exception(f"parse_adsb_message crashed; skipping message: {e}")
+                    continue
+
+                if not aircraft_info:
+                    logger.debug("ADS-B parser returned no aircraft_info; skipping.")
+                    continue
+
+                # Use ICAO address as ID with aircraft- prefix
+                aircraft_id = f"aircraft-{aircraft_info['id']}"
+                logger.debug(f"ADS-B aircraft details for id: {aircraft_id} - {aircraft_info}")
+
+                if aircraft_id in drone_manager.drone_dict:
+                    drone = drone_manager.drone_dict[aircraft_id]
+                    drone.update(
+                        lat=aircraft_info.get('lat', 0.0),
+                        lon=aircraft_info.get('lon', 0.0),
+                        speed=aircraft_info.get('speed', 0.0),
+                        vspeed=aircraft_info.get('vspeed', 0.0),
+                        alt=aircraft_info.get('alt', 0.0),
+                        height=aircraft_info.get('height', 0.0),
+                        description=aircraft_info.get('description', ""),
+                        mac=aircraft_info.get('mac', ""),
+                        rssi=aircraft_info.get('rssi', 0),
+                        id_type=aircraft_info.get('id_type', ""),
+                        ua_type=aircraft_info.get('ua_type'),
+                        ua_type_name=aircraft_info.get('ua_type_name', ""),
+                        direction=aircraft_info.get('direction')
+                    )
+                    logger.debug(f"Updated ADS-B aircraft: {aircraft_id}")
+                else:
+                    drone = Drone(
+                        id=aircraft_id,
+                        lat=aircraft_info.get('lat', 0.0),
+                        lon=aircraft_info.get('lon', 0.0),
+                        speed=aircraft_info.get('speed', 0.0),
+                        vspeed=aircraft_info.get('vspeed', 0.0),
+                        alt=aircraft_info.get('alt', 0.0),
+                        height=aircraft_info.get('height', 0.0),
+                        pilot_lat=0.0,
+                        pilot_lon=0.0,
+                        description=aircraft_info.get('description', ""),
+                        mac=aircraft_info.get('mac', ""),
+                        rssi=aircraft_info.get('rssi', 0),
+                        home_lat=0.0,
+                        home_lon=0.0,
+                        id_type=aircraft_info.get('id_type', ""),
+                        ua_type=aircraft_info.get('ua_type'),
+                        ua_type_name=aircraft_info.get('ua_type_name', ""),
+                        operator_id_type="",
+                        operator_id="",
+                        op_status="",
+                        height_type="",
+                        ew_dir="",
+                        direction=aircraft_info.get('direction'),
+                        speed_multiplier=None,
+                        pressure_altitude=None,
+                        vertical_accuracy="",
+                        horizontal_accuracy="",
+                        baro_accuracy="",
+                        speed_accuracy="",
+                        timestamp="",
+                        timestamp_accuracy="",
+                        index=0,
+                        runtime=0,
+                        caa_id="",
+                        freq=None
+                    )
+                    drone_manager.update_or_add_drone(aircraft_id, drone)
+                    logger.info(f"Added new ADS-B aircraft: {aircraft_id} ({aircraft_info.get('callsign', 'N/A')})")
+
+            # Handle UAT messages
+            if uat_socket and uat_socket in socks and socks[uat_socket] == zmq.POLLIN:
+                try:
+                    message = uat_socket.recv_json()
+                except ValueError as e:
+                    logger.warning(f"UAT JSON decode failed: {e}")
+                    continue
+                except Exception as e:
+                    logger.exception(f"UAT recv failed: {e}")
+                    continue
+
+                try:
+                    aircraft_info = parse_uat_message(message)
+                except Exception as e:
+                    logger.exception(f"parse_uat_message crashed; skipping message: {e}")
+                    continue
+
+                if not aircraft_info:
+                    logger.debug("UAT parser returned no aircraft_info; skipping.")
+                    continue
+
+                # Use address as ID with uat- prefix
+                aircraft_id = f"uat-{aircraft_info['id']}"
+                logger.debug(f"UAT aircraft details for id: {aircraft_id} - {aircraft_info}")
+
+                if aircraft_id in drone_manager.drone_dict:
+                    drone = drone_manager.drone_dict[aircraft_id]
+                    drone.update(
+                        lat=aircraft_info.get('lat', 0.0),
+                        lon=aircraft_info.get('lon', 0.0),
+                        speed=aircraft_info.get('speed', 0.0),
+                        vspeed=aircraft_info.get('vspeed', 0.0),
+                        alt=aircraft_info.get('alt', 0.0),
+                        height=aircraft_info.get('height', 0.0),
+                        description=aircraft_info.get('description', ""),
+                        mac=aircraft_info.get('mac', ""),
+                        rssi=aircraft_info.get('rssi', 0),
+                        id_type=aircraft_info.get('id_type', ""),
+                        ua_type=aircraft_info.get('ua_type'),
+                        ua_type_name=aircraft_info.get('ua_type_name', ""),
+                        direction=aircraft_info.get('direction')
+                    )
+                    logger.debug(f"Updated UAT aircraft: {aircraft_id}")
+                else:
+                    drone = Drone(
+                        id=aircraft_id,
+                        lat=aircraft_info.get('lat', 0.0),
+                        lon=aircraft_info.get('lon', 0.0),
+                        speed=aircraft_info.get('speed', 0.0),
+                        vspeed=aircraft_info.get('vspeed', 0.0),
+                        alt=aircraft_info.get('alt', 0.0),
+                        height=aircraft_info.get('height', 0.0),
+                        pilot_lat=0.0,
+                        pilot_lon=0.0,
+                        description=aircraft_info.get('description', ""),
+                        mac=aircraft_info.get('mac', ""),
+                        rssi=aircraft_info.get('rssi', 0),
+                        home_lat=0.0,
+                        home_lon=0.0,
+                        id_type=aircraft_info.get('id_type', ""),
+                        ua_type=aircraft_info.get('ua_type'),
+                        ua_type_name=aircraft_info.get('ua_type_name', ""),
+                        operator_id_type="",
+                        operator_id="",
+                        op_status="",
+                        height_type="",
+                        ew_dir="",
+                        direction=aircraft_info.get('direction'),
+                        speed_multiplier=None,
+                        pressure_altitude=None,
+                        vertical_accuracy="",
+                        horizontal_accuracy="",
+                        baro_accuracy="",
+                        speed_accuracy="",
+                        timestamp="",
+                        timestamp_accuracy="",
+                        index=0,
+                        runtime=0,
+                        caa_id="",
+                        freq=None
+                    )
+                    drone_manager.update_or_add_drone(aircraft_id, drone)
+                    logger.info(f"Added new UAT aircraft: {aircraft_id} ({aircraft_info.get('callsign', 'N/A')})")
+
             if status_socket and status_socket in socks and socks[status_socket] == zmq.POLLIN:
                 try:
                     status_message = status_socket.recv_json()
@@ -534,6 +741,8 @@ def zmq_to_cot(
                 if lattice_sink is not None:
                     try:
                         lattice_sink.publish_system(status_message)
+                        #TODO: Add system_status to lattice sink system for health components
+                        logger.debug(f"Published system status to Lattice: {status_message}")
                     except Exception as e:
                         logger.warning(f"Lattice publish_system failed: {e}")
 
@@ -560,6 +769,16 @@ def zmq_to_cot(
         try:
             if status_socket:
                 status_socket.close(0)
+        except Exception:
+            pass
+        try:
+            if adsb_socket:
+                adsb_socket.close(0)
+        except Exception:
+            pass
+        try:
+            if uat_socket:
+                uat_socket.close(0)
         except Exception:
             pass
         try:
@@ -720,6 +939,12 @@ if __name__ == "__main__":
         ),
         "lattice_drone_rate": args.lattice_drone_rate if args.lattice_drone_rate is not None else get_float(config_values.get("lattice_drone_rate", 1.0)),
         "lattice_wd_rate": args.lattice_wd_rate if args.lattice_wd_rate is not None else get_float(config_values.get("lattice_wd_rate", 0.2)),
+
+        # ---- ADS-B and UAT Configuration ----
+        "adsb_enabled": get_bool(config_values.get("adsb_enabled", False)),
+        "adsb_zmq_port": get_int(config_values.get("adsb_zmq_port"), None),
+        "uat_enabled": get_bool(config_values.get("uat_enabled", False)),
+        "uat_zmq_port": get_int(config_values.get("uat_zmq_port"), None),
     }
 
     
@@ -791,4 +1016,8 @@ if __name__ == "__main__":
         multicast_ttl=config["multicast_ttl"],
         enable_receive=config["enable_receive"],
         lattice_sink=lattice_sink,
+        adsb_enabled=config["adsb_enabled"],
+        adsb_zmq_port=config["adsb_zmq_port"],
+        uat_enabled=config["uat_enabled"],
+        uat_zmq_port=config["uat_zmq_port"],
     )
