@@ -1,25 +1,17 @@
 """
-MIT License
+Copyright 2025 cemaxecuter
 
-Copyright (c) 2025 cemaxecuter
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+    http://www.apache.org/licenses/LICENSE-2.0
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 """
 
 import time
@@ -64,10 +56,11 @@ class ADSBTracker:
 
     def craft_to_cot(self, craft: Dict[str, Any]) -> Optional[bytes]:
         """
-        Map a single aircraft from dump1090's aircraft.json into a simple CoT event.
+        Map a single aircraft from readsb / dump1090-style JSON into a CoT event.
 
         Fields we care about (if present):
           - hex, flight, lat, lon, alt_geom, alt_baro, gs (kt), track (deg)
+          - squawk, category, reg, onground / OnGround, nac_p / NACp, nac_v / NACv
         """
         lat = craft.get("lat")
         lon = craft.get("lon")
@@ -78,14 +71,50 @@ class ADSBTracker:
         if not uid:
             return None
 
-        # prefer geometric altitude, fall back to barometric, else 0
+        # Prefer geometric altitude, fall back to barometric, else 0
         alt = craft.get("alt_geom")
         if alt is None:
             alt = craft.get("alt_baro", 0)
 
+        # Identity-ish stuff
         callsign = (craft.get("flight") or craft.get("hex") or uid).strip()
-        gs = float(craft.get("gs") or 0.0)       # knots
-        track = float(craft.get("track") or 0.0) # degrees
+        hex_id = (craft.get("hex") or "").upper()
+        squawk = craft.get("squawk")
+        # readsb can add reg if using db-file / db-file-lt, but it's optional
+        reg = craft.get("reg") or craft.get("r")
+        category = craft.get("category") or craft.get("cat")
+
+        # Kinematics
+        gs = float(craft.get("gs") or 0.0)        # knots
+        track = float(craft.get("track") or 0.0)  # degrees
+
+        # Ground / air state
+        # readsb: "onground": 1/0; other sources might use "OnGround": True/False
+        on_ground = bool(
+            craft.get("onground") or craft.get("OnGround") or False
+        )
+
+        # Position quality (NACp / NACv -> CE / LE), if present
+        nac_p = craft.get("NACp", craft.get("nac_p"))
+        nac_v = craft.get("NACv", craft.get("nac_v", nac_p))
+
+        # Defaults (roughly what you had before)
+        ce_val = 35.0
+        le_val = 999999.0
+
+        if nac_p is not None:
+            try:
+                nac_p_f = float(nac_p)
+                nac_v_f = float(nac_v) if nac_v is not None else nac_p_f
+                # Inspired by common ADS-B handling: slightly different
+                # constant when on the ground vs airborne.
+                ground_const = 51.56 if on_ground else 56.57
+                ce_val = nac_p_f + ground_const
+                le_val = nac_v_f + 12.5
+            except (TypeError, ValueError):
+                # fall back to defaults if parsing fails
+                ce_val = 35.0
+                le_val = 999999.0
 
         now = datetime.datetime.utcnow()
         t = now.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
@@ -93,7 +122,7 @@ class ADSBTracker:
             "%Y-%m-%dT%H:%M:%S.%fZ"
         )
 
-        # Simple/default air track. We can get fancy later.
+        # Simple/default air track for now; we can refine later.
         cot_type = "a-f-A"
 
         event = etree.Element(
@@ -113,26 +142,48 @@ class ADSBTracker:
             lat=str(lat),
             lon=str(lon),
             hae=str(float(alt)),
-            ce="35.0",
-            le="999999",
+            ce=str(float(ce_val)),
+            le=str(float(le_val)),
         )
 
         detail = etree.SubElement(event, "detail")
         etree.SubElement(detail, "contact", callsign=callsign)
 
         # Include <track> so TAK draws heading
-        etree.SubElement(
+        track_el = etree.SubElement(
             detail,
             "track",
             course=str(track),
             speed=str(gs),
         )
 
-        remarks = (
-            f"ADS-B hex={craft.get('hex','').upper()} "
-            f"cs={callsign} alt={alt}ft gs={gs}kt track={track} "
-            f"src=dump1090"
-        )
+        # If we know it's on the ground, we can hint at that via slope.
+        if on_ground:
+            track_el.set("slope", "0")
+
+        # Build richer remarks but keep it compact
+        remark_parts = [
+            "ADS-B",
+            f"hex={hex_id}" if hex_id else None,
+            f"cs={callsign}" if callsign else None,
+            f"alt={alt}ft",
+            f"gs={gs}kt",
+            f"track={track}",
+        ]
+
+        if squawk:
+            remark_parts.append(f"squawk={squawk}")
+        if reg:
+            remark_parts.append(f"reg={reg}")
+        if category:
+            remark_parts.append(f"cat={category}")
+        if on_ground:
+            remark_parts.append("onground=1")
+
+        # You can flip this to "src=readsb" if you want to be explicit
+        remark_parts.append("src=adsb")
+
+        remarks = " ".join(p for p in remark_parts if p)
         etree.SubElement(detail, "remarks").text = xml.sax.saxutils.escape(remarks)
 
         xml_bytes = etree.tostring(
@@ -177,7 +228,7 @@ def adsb_worker_loop(
 ):
     """
     Background worker:
-      - periodically loads aircraft.json
+      - periodically loads aircraft JSON (readsb / dump1090 style)
       - builds CoT for each aircraft
       - sends via shared CotMessenger
 
@@ -202,7 +253,9 @@ def adsb_worker_loop(
         except FileNotFoundError:
             now = time.time()
             if now - last_missing_log > missing_log_interval:
-                logger.warning(f"ADS-B: {json_url} not found; waiting for dump1090 output.")
+                logger.warning(
+                    f"ADS-B: {json_url} not found; waiting for JSON output."
+                )
                 last_missing_log = now
             time.sleep(poll_interval)
             continue
