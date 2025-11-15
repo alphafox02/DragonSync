@@ -54,6 +54,7 @@ from manager import DroneManager
 from messaging import CotMessenger
 from utils import load_config, validate_config, get_str, get_int, get_float, get_bool
 from telemetry_parser import parse_drone_info
+from aircraft import adsb_worker_loop
 
 UA_TYPE_MAPPING = {
     0: 'No UA type defined',
@@ -152,7 +153,7 @@ def setup_tls_context(tak_tls_p12: str, tak_tls_p12_pass: Optional[str], tak_tls
 
     try:
         tls_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-        tls_context.load_cert_chain(certfile=cert_temp_path, keyfile=key_temp_path, password=p12_pass)
+        tls_context.load_cert_chain(certfile=cert_temp_path, keyfile=key_temp_path, password=tak_tls_p12_pass)
         if ca_bytes:
             tls_context.load_verify_locations(cafile=ca_temp_path)
         if tak_tls_skip_verify:
@@ -182,6 +183,14 @@ def zmq_to_cot(
     multicast_ttl: int = 1,
     enable_receive: bool = False,
     lattice_sink: Optional[object] = None,
+    mqtt_sink: Optional[object] = None,
+    adsb_enabled=False,
+    adsb_json_url=None,
+    adsb_uid_prefix="adsb-",
+    adsb_cot_stale=15.0,
+    adsb_rate_limit=3.0,
+    adsb_min_alt=0,
+    adsb_max_alt=0,
 ):
     """Main function to convert ZMQ messages to CoT and send to TAK server."""
 
@@ -230,6 +239,35 @@ def zmq_to_cot(
     # Start receiver if enabled
     cot_messenger.start_receiver()
 
+    # ---- Optional ADS-B worker (dump1090 aircraft.json) ----
+    adsb_stop = threading.Event()
+    adsb_thread = None
+
+    if adsb_enabled and adsb_json_url:
+        try:
+            logger.info(f"ADS-B enabled; starting worker for {adsb_json_url}")
+            adsb_thread = threading.Thread(
+                target=adsb_worker_loop,
+                name="adsb-worker",
+                kwargs=dict(
+                    json_url=adsb_json_url,
+                    cot_messenger=cot_messenger,
+                    uid_prefix=adsb_uid_prefix,
+                    rate_limit=adsb_rate_limit,
+                    stale=adsb_cot_stale,
+                    min_alt=adsb_min_alt,
+                    max_alt=adsb_max_alt,
+                    poll_interval=1.0,
+                    stop_event=adsb_stop,
+                ),
+                daemon=True,
+            )
+            adsb_thread.start()
+        except Exception as e:
+            logger.exception(f"Failed to start ADS-B worker: {e}")
+    else:
+        logger.info("ADS-B ingestion disabled or adsb_json_url not set; skipping ADS-B worker.")
+
     # ---- Build sinks list (Lattice + MQTT) ----
     extra_sinks = []
 
@@ -237,41 +275,8 @@ def zmq_to_cot(
     if lattice_sink is not None:
         extra_sinks.append(lattice_sink)
 
-    # MQTT sink (optional)
-    mqtt_sink = None
-    if config.get("mqtt_enabled"):
-        if MqttSink is None:
-            logger.critical("mqtt_enabled=true but mqtt_sink.py is missing or failed to import.")
-        else:
-            try:
-                mqtt_sink = MqttSink(
-                    host=config.get("mqtt_host", "127.0.0.1"),
-                    port=int(config.get("mqtt_port", 1883)),
-                    username=(config.get("mqtt_username") or None),
-                    password=(config.get("mqtt_password") or None),
-                    tls=bool(config.get("mqtt_tls", False)),
-                    ca_file=(config.get("mqtt_ca_file") or None),
-                    certfile=(config.get("mqtt_certfile") or None),
-                    keyfile=(config.get("mqtt_keyfile") or None),
-                    tls_insecure=bool(config.get("mqtt_tls_insecure", False)),
-
-                    aggregate_topic=config.get("mqtt_topic", "wardragon/drones"),
-                    retain_state=bool(config.get("mqtt_retain", True)),
-
-                    per_drone_enabled=bool(config.get("mqtt_per_drone_enabled", False)),
-                    per_drone_base=config.get("mqtt_per_drone_base", "wardragon/drone"),
-
-                    ha_enabled=bool(config.get("mqtt_ha_enabled", False)),
-                    ha_prefix=config.get("mqtt_ha_prefix", "homeassistant"),
-                    ha_device_base=config.get("mqtt_ha_device_base", "wardragon_drone"),
-                )
-                extra_sinks.append(mqtt_sink)
-                logger.info("MQTT sink enabled (aggregate=%s, per_drone=%s, HA=%s)",
-                            config.get("mqtt_topic", "wardragon/drones"),
-                            bool(config.get("mqtt_per_drone_enabled", False)),
-                            bool(config.get("mqtt_ha_enabled", False)))
-            except Exception as e:
-                logger.exception("Failed to initialize MQTT sink: %s", e)
+    if mqtt_sink is not None:
+        extra_sinks.append(mqtt_sink)
 
     # Initialize DroneManager with CotMessenger (no legacy MQTT args)
     drone_manager = DroneManager(
@@ -301,6 +306,12 @@ def zmq_to_cot(
                 drone_manager.close()
             except Exception:
                 pass
+        try:
+            adsb_stop.set()
+            if adsb_thread and adsb_thread.is_alive():
+                adsb_thread.join(timeout=2.0)
+        except Exception:
+            pass
         logger.info("Cleaned up ZMQ resources")
         sys.exit(0)
 
@@ -731,6 +742,15 @@ if __name__ == "__main__":
         ),
         "lattice_drone_rate": args.lattice_drone_rate if args.lattice_drone_rate is not None else get_float(config_values.get("lattice_drone_rate", 1.0)),
         "lattice_wd_rate": args.lattice_wd_rate if args.lattice_wd_rate is not None else get_float(config_values.get("lattice_wd_rate", 0.2)),
+                
+        # ---- ADS-B (dump1090) optional integration ----
+        "adsb_enabled": get_bool(config_values.get("adsb_enabled"), False),
+        "adsb_json_url": get_str(config_values.get("adsb_json_url")),
+        "adsb_uid_prefix": get_str(config_values.get("adsb_uid_prefix", "adsb-")),
+        "adsb_cot_stale": get_float(config_values.get("adsb_cot_stale", 15.0)),
+        "adsb_rate_limit": get_float(config_values.get("adsb_rate_limit", 3.0)),
+        "adsb_min_alt": get_int(config_values.get("adsb_min_alt", 0)),
+        "adsb_max_alt": get_int(config_values.get("adsb_max_alt", 0)),
     }
 
     
@@ -747,6 +767,40 @@ if __name__ == "__main__":
         tak_tls_p12_pass=config["tak_tls_p12_pass"],
         tak_tls_skip_verify=config["tak_tls_skip_verify"]
     ) if config["tak_protocol"] == 'TCP' and config["tak_tls_p12"] else None
+
+    # MQTT sink (optional)
+    mqtt_sink = None
+    try:
+        from mqtt_sink import MqttSink  # your existing helper
+    except Exception as e:
+        MqttSink = None  # keep running even if not present
+        if config.get("mqtt_enabled"):
+            logger.warning("MQTT enabled but mqtt_sink import failed: %s", e)
+
+    if config.get("mqtt_enabled") and MqttSink is not None:
+        try:
+            mqtt_sink = MqttSink(
+                host=config.get("mqtt_host", "127.0.0.1"),
+                port=int(config.get("mqtt_port", 1883)),
+                username=(config.get("mqtt_username") or None),
+                password=(config.get("mqtt_password") or None),
+                tls=bool(config.get("mqtt_tls", False)),
+                ca_file=(config.get("mqtt_ca_file") or None),
+                certfile=(config.get("mqtt_certfile") or None),
+                keyfile=(config.get("mqtt_keyfile") or None),
+                tls_insecure=bool(config.get("mqtt_tls_insecure", False)),
+                aggregate_topic=config.get("mqtt_topic", "wardragon/drones"),
+                retain_state=bool(config.get("mqtt_retain", True)),
+                per_drone_enabled=bool(config.get("mqtt_per_drone_enabled", False)),
+                per_drone_base=config.get("mqtt_per_drone_base", "wardragon/drone"),
+                ha_enabled=bool(config.get("mqtt_ha_enabled", False)),
+                ha_prefix=config.get("mqtt_ha_prefix", "homeassistant"),
+                ha_device_base=config.get("mqtt_ha_device_base", "wardragon_drone"),
+            )
+            logger.info("MQTT sink enabled.")
+        except Exception as e:
+            logger.exception("Failed to initialize MQTT sink: %s", e)
+            mqtt_sink = None
 
     # ---- Optional Lattice sink construction (import-protected) ----
     lattice_sink = None
@@ -802,4 +856,12 @@ if __name__ == "__main__":
         multicast_ttl=config["multicast_ttl"],
         enable_receive=config["enable_receive"],
         lattice_sink=lattice_sink,
+        mqtt_sink=mqtt_sink,
+        adsb_enabled=config["adsb_enabled"],
+        adsb_json_url=config["adsb_json_url"],
+        adsb_uid_prefix=config["adsb_uid_prefix"],
+        adsb_cot_stale=config["adsb_cot_stale"],
+        adsb_rate_limit=config["adsb_rate_limit"],
+        adsb_min_alt=config["adsb_min_alt"],
+        adsb_max_alt=config["adsb_max_alt"],
     )
