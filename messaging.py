@@ -114,6 +114,9 @@ class CotMessenger:
         self.receive_thread: Optional[threading.Thread] = None
         self.running = False
 
+        # NEW: track when we last scanned interfaces for multicast sockets
+        self._last_iface_scan: float = 0.0  # NEW
+
         if self.enable_multicast and self.multicast_address and self.multicast_port:
             try:
                 ttl_packed = struct.pack("b", self.multicast_ttl)
@@ -170,6 +173,8 @@ class CotMessenger:
                     f"Initialized {len(self.multicast_sockets)} multicast socket(s) for "
                     f"{self.multicast_address}:{self.multicast_port} with TTL {self.multicast_ttl}"
                 )
+                # NEW: record that we’ve just done a scan
+                self._last_iface_scan = time.time()  # NEW
             except Exception as e:
                 logger.error(f"Failed to initialize multicast socket(s): {e}")
         else:
@@ -185,6 +190,97 @@ class CotMessenger:
         # Initialize receiver if enabled
         if self.enable_receive and self.multicast_address and self.multicast_port:
             self._setup_receiver()
+
+    # NEW: helper to periodically refresh multicast sockets when using 0.0.0.0
+    def _refresh_multicast_sockets_if_needed(self, refresh_interval: float = 30.0) -> None:
+        """
+        Refresh multicast sockets if they have not been initialized or if enough
+        time has passed since the last interface scan (for 0.0.0.0 mode).
+        """
+        if not self.enable_multicast:
+            return
+
+        now = time.time()
+        if (
+            not self.multicast_sockets
+            or (
+                self.multicast_interface == "0.0.0.0"
+                and self._last_iface_scan
+                and (now - self._last_iface_scan) > refresh_interval
+            )
+        ):
+            # Close any existing sockets before rebuilding
+            for sock, iface_ip in self.multicast_sockets:
+                try:
+                    sock.close()
+                    logger.debug(f"Closed stale multicast socket for interface {iface_ip} during refresh.")
+                except Exception as e:
+                    logger.error(f"Error closing multicast socket during refresh for {iface_ip}: {e}")
+
+            self.multicast_sockets = []
+
+            if not (self.multicast_address and self.multicast_port):
+                logger.error("Cannot refresh multicast sockets without multicast address and port.")
+                return
+
+            try:
+                ttl_packed = struct.pack("b", self.multicast_ttl)
+
+                if self.multicast_interface == "0.0.0.0":
+                    if netifaces:
+                        for iface in netifaces.interfaces():
+                            # Skip docker-style interfaces by name (docker0/br-*/veth*)
+                            if _is_docker_iface(iface):
+                                logger.debug(f"Skipping multicast TX on docker-like iface '{iface}' (refresh)")
+                                continue
+
+                            addrs = netifaces.ifaddresses(iface)
+                            if netifaces.AF_INET in addrs:
+                                for addr_info in addrs[netifaces.AF_INET]:
+                                    ip_addr = addr_info.get("addr")
+                                    # Keep original behavior; skip link-local only
+                                    if ip_addr and not ip_addr.startswith("169.254"):
+                                        # Skip specific SDR IP(s) if present
+                                        if ip_addr in SKIP_IFACE_IPS:
+                                            logger.debug(f"Skipping multicast TX on iface '{iface}' ip '{ip_addr}' (in SKIP_IFACE_IPS, refresh)")
+                                            continue
+
+                                        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+                                        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, ttl_packed)
+                                        packed_if = socket.inet_aton(ip_addr)
+                                        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, packed_if)
+                                        if ip_addr == "127.0.0.1":
+                                            sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 1)
+                                            logger.debug("Enabled IP_MULTICAST_LOOP on loopback (refresh)")
+                                        self.multicast_sockets.append((sock, ip_addr))
+                                        logger.debug(f"Refreshed multicast socket for interface {iface} with IP {ip_addr}")
+                        if not self.multicast_sockets:
+                            logger.error("No valid IPv4 interfaces found for multicast sending during refresh.")
+                    else:
+                        logger.error("netifaces module is required to enumerate interfaces when multicast_interface is 0.0.0.0.")
+                else:
+                    interface_ip = resolve_interface_to_ip(self.multicast_interface) if self.multicast_interface else None
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+                    sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, ttl_packed)
+                    if interface_ip:
+                        packed_if = socket.inet_aton(interface_ip)
+                        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, packed_if)
+                        if interface_ip == "127.0.0.1":
+                            sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 1)
+                            logger.debug("Enabled IP_MULTICAST_LOOP on loopback (refresh)")
+                        logger.debug(f"Set multicast interface to {interface_ip} (refresh)")
+                    self.multicast_sockets.append((sock, interface_ip or "default"))
+                    logger.debug(
+                        f"Refreshed multicast socket(s) for {self.multicast_address}:{self.multicast_port} using interface '{self.multicast_interface}'"
+                    )
+
+                self._last_iface_scan = now
+                logger.debug(
+                    f"Refreshed {len(self.multicast_sockets)} multicast socket(s) for "
+                    f"{self.multicast_address}:{self.multicast_port} with TTL {self.multicast_ttl}"
+                )
+            except Exception as e:
+                logger.error(f"Failed to refresh multicast socket(s): {e}")
 
     def _setup_receiver(self):
         """Sets up the multicast receiver socket."""
@@ -289,6 +385,9 @@ class CotMessenger:
                 "No TAK client configured. Skipping sending CoT message to TAK server."
             )
 
+        # NEW: ensure multicast sockets are up-to-date before sending
+        self._refresh_multicast_sockets_if_needed()  # NEW
+
         # Sending to multicast address(es)
         if self.enable_multicast and self.multicast_sockets:
             logger.debug(
@@ -356,4 +455,3 @@ class CotMessenger:
                 logger.debug("Closed TAK UDP client.")
             except Exception as e:
                 logger.error(f"Error closing TAK UDP client: {e}")
-
