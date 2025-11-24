@@ -119,7 +119,7 @@ At the moment, only one of these SDR‑driven roles can use the same RF front‑
 Assuming `readsb` is built/installed and you’re using the AntSDR in its Pluto‑compatible mode via SoapySDR:
 
 ```bash
-sudo readsb   --device-type soapysdr --soapy-device="driver=plutosdr"   --freq=1090000000 --gain=auto   --no-interactive   --write-json=/run/readsb --write-json-every=1 --json-location-accuracy=2   --net-bind-address=0.0.0.0 --net-api-port=8080   --soapy-enable-agc   --sdr-buffer-size=128
+sudo readsb --device-type soapysdr --soapy-device="driver=plutosdr" --freq=1090000000 --no-interactive --write-json=/run/readsb --write-json-every=1 --json-location-accuracy=2 --net-bind-address=0.0.0.0 --net-api-port=8080 --soapy-enable-agc --sdr-buffer-size=128
 ```
 
 Notes:
