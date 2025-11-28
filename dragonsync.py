@@ -146,7 +146,7 @@ def setup_tls_context(tak_tls_p12: str, tak_tls_p12_pass: Optional[str], tak_tls
 
     try:
         tls_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-        tls_context.load_cert_chain(certfile=cert_temp_path, keyfile=key_temp_path, password=tak_tls_p12_pass)
+        tls_context.load_cert_chain(certfile=cert_temp_path, keyfile=key_temp_path, password=p12_pass)
         if ca_bytes:
             tls_context.load_verify_locations(cafile=ca_temp_path)
         if tak_tls_skip_verify:
