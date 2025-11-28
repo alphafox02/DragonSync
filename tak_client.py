@@ -84,14 +84,29 @@ class TAKClient:
     def send(self, cot_xml: bytes):
         """Sends a CoT XML message to the TAK server via TCP/TLS."""
         try:
+            # If socket is missing, try to reconnect BEFORE failing
+            if not self.sock:
+                logger.warning("Socket unavailable, attempting reconnect before send...")
+                with self.connecting_lock:
+                    if not self.sock:  # re-check inside lock
+                        self.connect()
+
+            # If still no socket, fail gracefully
             if not self.sock:
                 logger.error("No socket available to send CoT message via TCP/TLS.")
                 return
+
+            # Attempt to send
             self.sock.sendall(cot_xml)
             logger.debug(f"Sent CoT message via TCP/TLS: {cot_xml}")
+
         except Exception as e:
             logger.error(f"Error sending CoT message via TCP/TLS: {e}")
             self.close()
+
+            # Try reconnecting immediately (restores old behavior)
+            with self.connecting_lock:
+                self.connect()
 
     def close(self):
         """Closes the connection to the TAK server."""
