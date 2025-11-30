@@ -1,0 +1,3 @@
+[submodule "faa-rid-lookup"]
+	path = faa-rid-lookup
+	url = https://github.com/jlrjr/faa-rid-lookup

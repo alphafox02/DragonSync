@@ -6,3 +6,4 @@ netifaces
 psutil
 pycparser
 pyzmq
+requests

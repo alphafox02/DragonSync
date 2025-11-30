@@ -26,6 +26,7 @@ import time
 import threading
 import tempfile
 from typing import Optional, Dict, Any
+from pathlib import Path
 import atexit
 import os
 
@@ -48,6 +49,62 @@ from messaging import CotMessenger
 from utils import load_config, validate_config, get_str, get_int, get_float, get_bool
 from telemetry_parser import parse_drone_info
 from aircraft import adsb_worker_loop
+
+# FAA RID lookup module (bundled as git submodule)
+try:
+    FAA_LOOKUP_PATH = Path(__file__).parent / "faa-rid-lookup"
+    if FAA_LOOKUP_PATH.exists():
+        sys.path.append(str(FAA_LOOKUP_PATH))
+    from drone_serial_lookup import lookup_serial
+    _FAA_LOOKUP_AVAILABLE = True
+except Exception as e:
+    lookup_serial = None  # type: ignore
+    _FAA_LOOKUP_AVAILABLE = False
+    logger.warning("FAA RID lookup module unavailable: %s", e)
+
+# One-shot FAA lookup helper to avoid repeated failures
+_rid_lookup_enabled = _FAA_LOOKUP_AVAILABLE
+_rid_lookup_failure_logged = False
+
+
+def _perform_rid_lookup(serial_number: str) -> Optional[Dict[str, Any]]:
+    """Call the FAA lookup once; disable on failure/missing DB."""
+    global _rid_lookup_enabled, _rid_lookup_failure_logged
+    if not _rid_lookup_enabled or lookup_serial is None:
+        return None
+    if not serial_number:
+        return None
+
+    try:
+        return lookup_serial(serial_number, use_api_fallback=True, add_to_db=True)
+    except FileNotFoundError as e:
+        if not _rid_lookup_failure_logged:
+            logger.warning("FAA RID lookup skipped (database missing?): %s", e)
+            _rid_lookup_failure_logged = True
+        _rid_lookup_enabled = False
+    except Exception as e:
+        if not _rid_lookup_failure_logged:
+            logger.warning("FAA RID lookup failed; disabling further attempts: %s", e)
+            _rid_lookup_failure_logged = True
+        _rid_lookup_enabled = False
+    return None
+
+
+def _apply_rid_lookup(drone_obj: Drone, serial_number: str) -> None:
+    """Populate RID fields on the drone once."""
+    if getattr(drone_obj, "rid_lookup_attempted", False):
+        return
+
+    lookup = _perform_rid_lookup(serial_number)
+    if lookup is None:
+        # Mark attempted to avoid repeating if the module is unavailable
+        drone_obj.rid_lookup_attempted = True
+        return
+
+    try:
+        drone_obj.apply_rid_lookup_result(lookup)
+    except Exception as e:
+        logger.debug("RID lookup apply failed for %s: %s", serial_number, e)
 
 UA_TYPE_MAPPING = {
     0: 'No UA type defined',
@@ -355,11 +412,13 @@ def zmq_to_cot(
                     else:
                         logger.debug(f"Drone id already has prefix: {drone_info['id']}")
                     drone_id = drone_info['id']
+                    serial_number = drone_id[len("drone-"):] if drone_id.startswith("drone-") else drone_id
 
                     logger.debug(f"Drone detailts for id: {drone_id} - {drone_info}")
 
                     if drone_id in drone_manager.drone_dict:
                         drone = drone_manager.drone_dict[drone_id]
+                        _apply_rid_lookup(drone, serial_number)
                         drone.update(
                             lat=drone_info.get('lat', 0.0),
                             lon=drone_info.get('lon', 0.0),
@@ -435,6 +494,7 @@ def zmq_to_cot(
                             caa_id=drone_info.get('caa', ""),
                             freq=drone_info.get('freq')
                         )
+                        _apply_rid_lookup(drone, serial_number)
                         drone_manager.update_or_add_drone(drone_id, drone)
                         logger.debug(f"Added new drone: {drone_id}")
                 else:
