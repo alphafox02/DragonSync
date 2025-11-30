@@ -1,53 +1,36 @@
-# ZMQ Drone Logger
+# Utils: RID-aware logging and viewer
 
-This script subscribes to a DragonSync (or compatible) ZeroMQ publisher, parses incoming drone Remote ID telemetry, and writes structured logs to a CSV file for later analysis or KML generation.
+## ZMQ logger (RID + SQLite)
 
-## Features
-- Connects to a ZMQ telemetry stream (default `tcp://127.0.0.1:4224`).
-- Extracts key Remote ID fields:
-  - Core: `id`, `lat`, `lon`, `alt`, `speed`, `rssi`, `mac`, `description`, `pilot_lat`, `pilot_lon`
-  - Extended: `home_lat`, `home_lon`, `ua_type`, `operator_id`, `op_status`, `height`, `direction`, `vspeed`, `freq`, etc.
-- Per-drone **rate-limiting**:
-  - Only logs if:
-    - Enough time has passed (`--min-log-interval`, default 30s), OR
-    - Drone moved ≥ `--min-move-m` (default 25m), OR
-    - Altitude change ≥ `--min-alt-change` (default 5m), OR
-    - Speed change ≥ `--min-speed-change` (default 1 m/s).
-- ZMQ backpressure options:
-  - `--rcv-hwm` to set receive buffer high-water mark.
-  - `--conflate` to drop backlog and keep only the latest message.
-- CSV output with consistent headers. Missing fields are logged as blanks.
+Log telemetry from the ZMQ feed, enriched with FAA RID data (local DB, optional async API fallback).
 
-## Usage
-
+Examples:
 ```bash
-python3 logger.py \
-  --zmq-host 127.0.0.1 \
-  --zmq-port 4224 \
-  --output-csv drone_log.csv \
-  --min-log-interval 30 \
-  --min-move-m 25 \
-  --min-alt-change 5 \
-  --min-speed-change 1
+# Basic: CSV only
+python utils/zmq_logger_for_kml.py --output-csv logs/drone_log.csv
+
+# RID enrichment + SQLite (daily rotation, keep 7 days)
+python utils/zmq_logger_for_kml.py \
+  --rid-enabled \
+  --sqlite logs/drone_log.sqlite \
+  --sqlite-rotate-daily \
+  --sqlite-retain-days 7
+
+# Enable FAA API fallback (async; won’t block logging)
+python utils/zmq_logger_for_kml.py --rid-enabled --rid-api --sqlite logs/drone_log.sqlite
 ```
 
-Optional flags:
-- `--flush-interval 5` → flush to disk every 5 seconds
-- `--rcv-hwm 1000` → limit queued messages
-- `--conflate` → only keep most recent
-- `--debug` → verbose logging
+Key flags:
+- `--rid-enabled` (use local FAA DB), `--rid-api` (async FAA API fallback)
+- `--sqlite <path>` to log to SQLite; `--sqlite-rotate-daily` for per-day files; `--sqlite-retain-days N` to prune old rotated files
+- `--output-csv` still available; you can use both CSV and SQLite together
 
-## Example CSV Header
+RID columns emitted: `rid_make`, `rid_model`, `rid_status`, `rid_tracking`, `rid_source`.
 
+## Offline viewer
+
+Serve a small map + table UI against the SQLite log (offline-safe canvas map):
+```bash
+python utils/log_viewer.py --db logs/drone_log.sqlite --port 5001
 ```
-timestamp,drone_id,lat,lon,alt,speed,rssi,mac,description,pilot_lat,pilot_lon,
-home_lat,home_lon,ua_type,ua_type_name,operator_id_type,operator_id,op_status,
-height,height_type,direction,vspeed,ew_dir,speed_multiplier,pressure_altitude,
-vertical_accuracy,horizontal_accuracy,baro_accuracy,speed_accuracy,
-timestamp_src,timestamp_accuracy,index,runtime,caa,freq
-```
-
-## Notes
-- Logs only meaningful changes, reducing spam when Remote ID is chatty.
-- Backwards-compatible with older DragonSync message shapes, but supports newer fields (home location, UA type, operator info, etc.).
-- CSV timestamps are UTC write time (`timestamp`), with `timestamp_src` reflecting any source-provided telemetry timestamp if available.
+Then open `http://127.0.0.1:5001`. Filters: drone id, RID make/model/status/source, time range, limit. Uses the same RID columns logged above. No external tiles required.
