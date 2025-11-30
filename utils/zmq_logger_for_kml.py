@@ -7,6 +7,7 @@ import csv
 import os
 import sys
 import threading
+import sqlite3
 from queue import Queue
 from pathlib import Path
 from datetime import datetime
@@ -164,7 +165,10 @@ def main():
     parser.add_argument("--zmq-port", type=int, default=4224)
     parser.add_argument("--zmq-status-port", type=int, default=None, help="ZMQ port for system status (default: disabled)")
     parser.add_argument("--include-system-location", action="store_true", help="Include system location in CSV (requires --zmq-status-port)")
-    parser.add_argument("--output-csv", default=None, help="Output CSV file path. If not specified, creates timestamped file.")
+    parser.add_argument("--output-csv", default=None, help="Output CSV file path. If not specified and --sqlite not set, creates timestamped file.")
+    parser.add_argument("--sqlite", default=None, help="Optional SQLite log file path. When set, logs are stored in SQLite instead of CSV unless --output-csv is also provided.")
+    parser.add_argument("--sqlite-rotate-daily", action="store_true", help="When using --sqlite, write to per-day files (name_YYYYMMDD.sqlite).")
+    parser.add_argument("--sqlite-retain-days", type=int, default=0, help="When rotating, delete SQLite files older than this many days (0=keep all).")
     parser.add_argument("--flush-interval", type=float, default=5.0, help="Flush CSV buffer interval (seconds)")
     parser.add_argument("--rcv-hwm", type=int, default=0, help="ZMQ receive high water mark (0=unlimited)")
     parser.add_argument("--conflate", action="store_true", help="Keep only latest message (drop backlog)")
@@ -186,14 +190,17 @@ def main():
                         format="%(asctime)s - %(levelname)s - %(message)s")
     logger = logging.getLogger(__name__)
 
-    # Generate timestamped filename if --output-csv not specified
-    if args.output_csv is None:
+    # Generate timestamped filename if CSV is desired and not specified
+    if args.output_csv is None and not args.sqlite:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_csv = f"drone_log_{timestamp}.csv"
     else:
         output_csv = args.output_csv
 
-    logger.info(f"Output CSV: {output_csv}")
+    if output_csv:
+        logger.info(f"Output CSV: {output_csv}")
+    if args.sqlite:
+        logger.info(f"Output SQLite: {args.sqlite} (rotate daily: {args.sqlite_rotate_daily})")
     logger.info(f"Connecting to ZMQ at tcp://{args.zmq_host}:{args.zmq_port}")
 
     # FAA RID lookup setup (optional)
@@ -282,18 +289,118 @@ def main():
         # FAA RID enrichment (optional; blanks if not available)
         "rid_make","rid_model","rid_status","rid_tracking","rid_source"
     ]
+
+    sqlite_insert_sql = """
+        INSERT INTO logs (
+            ts, drone_id, lat, lon, alt, speed, rssi, mac, description, pilot_lat, pilot_lon,
+            home_lat, home_lon, ua_type, ua_type_name, operator_id_type, operator_id, op_status,
+            height, height_type, direction, vspeed, ew_dir, speed_multiplier, pressure_altitude,
+            vertical_accuracy, horizontal_accuracy, baro_accuracy, speed_accuracy,
+            timestamp_src, timestamp_accuracy, idx, runtime, caa, freq,
+            rid_make, rid_model, rid_status, rid_tracking, rid_source
+        ) VALUES (
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?, 
+            ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?
+        )
+    """
     if args.include_system_location:
         headers.extend(["system_id","system_lat","system_lon","system_alt"])
 
-    # Check if file exists and has content to determine if we need to write headers
-    file_exists = os.path.exists(output_csv)
-    file_is_empty = not file_exists or os.path.getsize(output_csv) == 0
-    csv_file = open(output_csv, 'a', newline='')
-    csv_writer = csv.writer(csv_file)
-    if file_is_empty:
-        logger.info("Writing CSV headers to new file")
-        csv_writer.writerow(headers)
-        csv_file.flush()  # Ensure header is written immediately
+    # CSV setup (optional)
+    csv_writer = None
+    csv_file = None
+    if output_csv:
+        file_exists = os.path.exists(output_csv)
+        file_is_empty = not file_exists or os.path.getsize(output_csv) == 0
+        csv_file = open(output_csv, 'a', newline='')
+        csv_writer = csv.writer(csv_file)
+        if file_is_empty:
+            logger.info("Writing CSV headers to new file")
+            csv_writer.writerow(headers)
+            csv_file.flush()  # Ensure header is written immediately
+
+    # SQLite setup (optional)
+    sqlite_path_base = args.sqlite
+    sqlite_conn = None
+    sqlite_cur = None
+    sqlite_day = None
+
+    def _sqlite_path_for_today():
+        if not sqlite_path_base:
+            return None
+        if not args.sqlite_rotate_daily:
+            return sqlite_path_base
+        stem, ext = os.path.splitext(sqlite_path_base)
+        return f"{stem}_{datetime.utcnow().strftime('%Y%m%d')}{ext or '.sqlite'}"
+
+    def _sqlite_prune_old():
+        if not args.sqlite_rotate_daily or args.sqlite_retain_days <= 0:
+            return
+        try:
+            stem, ext = os.path.splitext(sqlite_path_base)
+            prefix = f"{stem}_"
+            for fname in os.listdir(os.path.dirname(sqlite_path_base) or "."):
+                if not fname.startswith(os.path.basename(prefix)) or not fname.endswith(ext or ".sqlite"):
+                    continue
+                date_part = fname[len(os.path.basename(prefix)) : -len(ext or ".sqlite")]
+                try:
+                    dt_obj = datetime.strptime(date_part, "%Y%m%d")
+                except Exception:
+                    continue
+                age_days = (datetime.utcnow() - dt_obj).days
+                if age_days > args.sqlite_retain_days:
+                    try:
+                        os.remove(os.path.join(os.path.dirname(sqlite_path_base), fname))
+                        logger.info(f"Pruned old SQLite log: {fname}")
+                    except Exception as e:
+                        logger.debug(f"Failed to prune {fname}: {e}")
+        except Exception as e:
+            logger.debug(f"Prune failed: {e}")
+
+    def _sqlite_open():
+        nonlocal sqlite_conn, sqlite_cur, sqlite_day
+        if not sqlite_path_base:
+            return
+        path = _sqlite_path_for_today()
+        day_str = datetime.utcnow().strftime("%Y%m%d")
+        if sqlite_conn and sqlite_day == day_str:
+            return
+        if sqlite_conn:
+            sqlite_conn.commit()
+            sqlite_conn.close()
+        sqlite_day = day_str
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        sqlite_conn = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
+        sqlite_conn.execute("PRAGMA journal_mode=WAL;")
+        sqlite_cur = sqlite_conn.cursor()
+        sqlite_cur.execute("""
+            CREATE TABLE IF NOT EXISTS logs (
+                ts TEXT,
+                drone_id TEXT,
+                lat REAL, lon REAL, alt REAL, speed REAL,
+                rssi REAL, mac TEXT, description TEXT,
+                pilot_lat REAL, pilot_lon REAL,
+                home_lat REAL, home_lon REAL,
+                ua_type TEXT, ua_type_name TEXT,
+                operator_id_type TEXT, operator_id TEXT, op_status TEXT,
+                height REAL, height_type TEXT, direction REAL, vspeed REAL,
+                ew_dir TEXT, speed_multiplier TEXT, pressure_altitude REAL,
+                vertical_accuracy TEXT, horizontal_accuracy TEXT, baro_accuracy TEXT, speed_accuracy TEXT,
+                timestamp_src TEXT, timestamp_accuracy TEXT, idx INTEGER, runtime REAL,
+                caa TEXT, freq REAL,
+                rid_make TEXT, rid_model TEXT, rid_status TEXT, rid_tracking TEXT, rid_source TEXT
+            )
+        """)
+        sqlite_cur.execute("CREATE INDEX IF NOT EXISTS idx_logs_ts ON logs(ts)")
+        sqlite_cur.execute("CREATE INDEX IF NOT EXISTS idx_logs_drone ON logs(drone_id)")
+        _sqlite_prune_old()
+
+    if args.sqlite:
+        _sqlite_open()
 
     buf = []
     last_flush = time.time()
@@ -404,8 +511,16 @@ def main():
             now = time.time()
             if (now - last_flush) >= args.flush_interval and buf:
                 logger.debug(f"Flushing {len(buf)} rows")
-                csv_writer.writerows(buf)
-                csv_file.flush()
+                if csv_writer:
+                    csv_writer.writerows(buf)
+                    csv_file.flush()
+                if sqlite_cur:
+                    _sqlite_open()
+                    try:
+                        sqlite_cur.executemany(sqlite_insert_sql, buf)
+                        sqlite_conn.commit()
+                    except Exception as e:
+                        logger.warning(f"SQLite write failed: {e}")
                 buf.clear()
                 last_flush = now
 
@@ -413,9 +528,20 @@ def main():
         logger.info("Interrupted by user.")
     finally:
         if buf:
-            csv_writer.writerows(buf)
-        csv_file.flush()
-        csv_file.close()
+            if csv_writer:
+                csv_writer.writerows(buf)
+            if sqlite_cur:
+                try:
+                    sqlite_cur.executemany(sqlite_insert_sql, buf)
+                    sqlite_conn.commit()
+                except Exception as e:
+                    logger.warning(f"SQLite final flush failed: {e}")
+        if csv_file:
+            csv_file.flush()
+            csv_file.close()
+        if sqlite_conn:
+            sqlite_conn.commit()
+            sqlite_conn.close()
         # Stop RID worker
         try:
             if rid_api_enabled and rid_thread and rid_thread.is_alive():

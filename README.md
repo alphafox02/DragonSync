@@ -58,6 +58,17 @@ If you install DragonSync elsewhere, ensure the following:
 
 ---
 
+## FAA RID Enrichment & Logging
+
+- FAA RID lookups are bundled as a submodule (`faa-rid-lookup`). Dragon telemetry is enriched with RID make/model/status/tracking in CoT and MQTT (no blocking on API fallbacks).
+- ZMQ logger (`utils/zmq_logger_for_kml.py`) can enrich logs with RID fields and write to SQLite for easy analysis:
+  - `--rid-enabled` (use local DB), optional `--rid-api` (async FAA API fallback)
+  - `--sqlite path.sqlite` to log to SQLite (optionally `--sqlite-rotate-daily` and `--sqlite-retain-days N`)
+  - CSV remains available via `--output-csv`
+- Offline viewer for SQLite logs: `python utils/log_viewer.py --db drone_log.sqlite --port 5001`
+  - Shows map + table with filters (drone id, RID make/model/status/source, time range)
+  - Offline-safe canvas map; no external tiles required
+
 ## How it Works (on WarDragon)
 
 ```text
