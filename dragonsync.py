@@ -26,6 +26,7 @@ import time
 import threading
 import tempfile
 from typing import Optional, Dict, Any
+from queue import Queue
 from pathlib import Path
 import atexit
 import os
@@ -62,49 +63,105 @@ except Exception as e:
     _FAA_LOOKUP_AVAILABLE = False
     logger.warning("FAA RID lookup module unavailable: %s", e)
 
-# One-shot FAA lookup helper to avoid repeated failures
+# FAA lookup controls and async worker
 _rid_lookup_enabled = _FAA_LOOKUP_AVAILABLE
 _rid_lookup_failure_logged = False
+_rid_lookup_queue: Optional[Queue] = None
+_rid_lookup_worker: Optional[threading.Thread] = None
 
 
-def _perform_rid_lookup(serial_number: str) -> Optional[Dict[str, Any]]:
-    """Call the FAA lookup once; disable on failure/missing DB."""
-    global _rid_lookup_enabled, _rid_lookup_failure_logged
-    if not _rid_lookup_enabled or lookup_serial is None:
-        return None
-    if not serial_number:
-        return None
+def _start_rid_lookup_worker() -> None:
+    """Start a background worker for FAA API fallback."""
+    global _rid_lookup_queue, _rid_lookup_worker
+    if not _rid_lookup_enabled:
+        return
+    if _rid_lookup_queue is None:
+        _rid_lookup_queue = Queue()
+    if _rid_lookup_worker and _rid_lookup_worker.is_alive():
+        return
 
+    def _worker():
+        global _rid_lookup_enabled, _rid_lookup_failure_logged
+        while True:
+            item = _rid_lookup_queue.get()
+            if item is None:
+                break
+            drone_obj, serial_number = item
+            try:
+                res = lookup_serial(serial_number, use_api_fallback=True, add_to_db=True)  # type: ignore
+            except FileNotFoundError as e:
+                if not _rid_lookup_failure_logged:
+                    logger.warning("FAA RID lookup skipped (database missing?): %s", e)
+                    _rid_lookup_failure_logged = True
+                _rid_lookup_enabled = False
+                drone_obj.rid_lookup_pending = False
+                continue
+            except Exception as e:
+                if not _rid_lookup_failure_logged:
+                    logger.warning("FAA RID lookup failed; disabling further attempts: %s", e)
+                    _rid_lookup_failure_logged = True
+                _rid_lookup_enabled = False
+                drone_obj.rid_lookup_pending = False
+                continue
+
+            try:
+                drone_obj.apply_rid_lookup_result(res)
+            except Exception as e:
+                logger.debug("RID lookup apply failed for %s: %s", serial_number, e)
+            finally:
+                drone_obj.rid_lookup_pending = False
+
+    _rid_lookup_worker = threading.Thread(target=_worker, daemon=True, name="rid_lookup_worker")
+    _rid_lookup_worker.start()
+
+
+def _queue_rid_lookup(drone_obj: Drone, serial_number: str) -> None:
+    """Queue a background RID lookup (API fallback) without blocking main loop."""
+    if not _rid_lookup_enabled or lookup_serial is None or not serial_number:
+        return
+    if drone_obj.rid_lookup_pending:
+        return
+    if _rid_lookup_queue is None:
+        return
+
+    drone_obj.rid_lookup_pending = True
+    drone_obj.rid_lookup_attempted = True  # prevent re-queueing
     try:
-        return lookup_serial(serial_number, use_api_fallback=True, add_to_db=True)
+        _rid_lookup_queue.put_nowait((drone_obj, serial_number))
+    except Exception as e:
+        drone_obj.rid_lookup_pending = False
+        logger.debug("Failed to enqueue RID lookup for %s: %s", serial_number, e)
+
+
+def _apply_rid_lookup(drone_obj: Drone, serial_number: str) -> None:
+    """
+    Perform a local DB lookup synchronously; if not found, queue API fallback asynchronously.
+    """
+    if not _rid_lookup_enabled or lookup_serial is None or not serial_number:
+        return
+    if drone_obj.rid_lookup_success or drone_obj.rid_lookup_pending:
+        return
+
+    # Synchronous local DB only (fast, no network)
+    try:
+        res = lookup_serial(serial_number, use_api_fallback=False)  # type: ignore
+        drone_obj.apply_rid_lookup_result(res)
     except FileNotFoundError as e:
         if not _rid_lookup_failure_logged:
             logger.warning("FAA RID lookup skipped (database missing?): %s", e)
             _rid_lookup_failure_logged = True
         _rid_lookup_enabled = False
+        return
     except Exception as e:
         if not _rid_lookup_failure_logged:
-            logger.warning("FAA RID lookup failed; disabling further attempts: %s", e)
+            logger.warning("FAA RID lookup failed (local DB); disabling: %s", e)
             _rid_lookup_failure_logged = True
         _rid_lookup_enabled = False
-    return None
-
-
-def _apply_rid_lookup(drone_obj: Drone, serial_number: str) -> None:
-    """Populate RID fields on the drone once."""
-    if getattr(drone_obj, "rid_lookup_attempted", False):
         return
 
-    lookup = _perform_rid_lookup(serial_number)
-    if lookup is None:
-        # Mark attempted to avoid repeating if the module is unavailable
-        drone_obj.rid_lookup_attempted = True
-        return
-
-    try:
-        drone_obj.apply_rid_lookup_result(lookup)
-    except Exception as e:
-        logger.debug("RID lookup apply failed for %s: %s", serial_number, e)
+    # If not found locally, queue API fallback in the background
+    if not drone_obj.rid_lookup_success:
+        _queue_rid_lookup(drone_obj, serial_number)
 
 UA_TYPE_MAPPING = {
     0: 'No UA type defined',
@@ -356,6 +413,12 @@ def zmq_to_cot(
                 drone_manager.close()
             except Exception:
                 pass
+        # Stop RID lookup worker
+        try:
+            if _rid_lookup_queue is not None:
+                _rid_lookup_queue.put_nowait(None)
+        except Exception:
+            pass
         try:
             adsb_stop.set()
             if adsb_thread and adsb_thread.is_alive():
@@ -715,6 +778,7 @@ if __name__ == "__main__":
 
     setup_logging(args.debug)
     logger.info("Starting ZMQ to CoT converter with log level: %s", "DEBUG" if args.debug else "INFO")
+    _start_rid_lookup_worker()
 
     # Retrieve 'tak_host' and 'tak_port' with precedence
     tak_host = args.tak_host if args.tak_host is not None else get_str(config_values.get("tak_host"))

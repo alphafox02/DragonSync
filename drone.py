@@ -143,6 +143,7 @@ class Drone:
         self.rid_source: Optional[str] = None
         self.rid_lookup_attempted: bool = False
         self.rid_lookup_success: bool = False
+        self.rid_lookup_pending: bool = False
 
     def update(
         self,
