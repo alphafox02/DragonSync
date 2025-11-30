@@ -5,6 +5,10 @@ import time
 import zmq
 import csv
 import os
+import sys
+import threading
+from queue import Queue
+from pathlib import Path
 from datetime import datetime
 from math import radians, sin, cos, asin, sqrt
 
@@ -171,6 +175,10 @@ def main():
     parser.add_argument("--min-alt-change", type=float, default=5.0, help="Minimum altitude change to trigger log (meters)")
     parser.add_argument("--min-speed-change", type=float, default=1.0, help="Minimum speed change to trigger log (m/s)")
 
+    # FAA RID lookup (local DB sync, optional API async)
+    parser.add_argument("--rid-enabled", action="store_true", help="Enrich rows with FAA RID lookup (local DB).")
+    parser.add_argument("--rid-api", action="store_true", help="Enable FAA API fallback (async; requires --rid-enabled).")
+
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
 
@@ -187,6 +195,56 @@ def main():
 
     logger.info(f"Output CSV: {output_csv}")
     logger.info(f"Connecting to ZMQ at tcp://{args.zmq_host}:{args.zmq_port}")
+
+    # FAA RID lookup setup (optional)
+    FAA_LOOKUP_AVAILABLE = False
+    lookup_serial = None
+    if args.rid_enabled:
+        try:
+            faa_path = Path(__file__).resolve().parent.parent / "faa-rid-lookup"
+            if faa_path.exists():
+                sys.path.append(str(faa_path))
+            from drone_serial_lookup import lookup_serial as _lookup_serial  # type: ignore
+            lookup_serial = _lookup_serial
+            FAA_LOOKUP_AVAILABLE = True
+        except Exception as e:
+            logger.warning(f"RID lookup disabled (module unavailable): {e}")
+            FAA_LOOKUP_AVAILABLE = False
+
+    rid_lookup_enabled = FAA_LOOKUP_AVAILABLE and args.rid_enabled
+    rid_api_enabled = rid_lookup_enabled and args.rid_api
+    rid_cache = {}
+    rid_pending = set()
+    rid_failure_logged = False
+    rid_queue: Queue = Queue()
+
+    def rid_worker():
+        nonlocal rid_lookup_enabled, rid_failure_logged
+        while True:
+            item = rid_queue.get()
+            if item is None:
+                break
+            serial = item
+            try:
+                res = lookup_serial(serial, use_api_fallback=True, add_to_db=True)  # type: ignore
+                rid_cache[serial] = res
+            except FileNotFoundError as e:
+                if not rid_failure_logged:
+                    logger.warning(f"RID lookup disabled (database missing?): {e}")
+                    rid_failure_logged = True
+                rid_lookup_enabled = False
+            except Exception as e:
+                if not rid_failure_logged:
+                    logger.warning(f"RID lookup failed; disabling: {e}")
+                    rid_failure_logged = True
+                rid_lookup_enabled = False
+            finally:
+                rid_pending.discard(serial)
+
+    rid_thread = None
+    if rid_api_enabled:
+        rid_thread = threading.Thread(target=rid_worker, daemon=True, name="rid_lookup_worker")
+        rid_thread.start()
 
     context = zmq.Context()
     socket = context.socket(zmq.SUB)
@@ -220,7 +278,9 @@ def main():
         "home_lat","home_lon","ua_type","ua_type_name","operator_id_type","operator_id","op_status",
         "height","height_type","direction","vspeed","ew_dir","speed_multiplier","pressure_altitude",
         "vertical_accuracy","horizontal_accuracy","baro_accuracy","speed_accuracy",
-        "timestamp_src","timestamp_accuracy","index","runtime","caa","freq"
+        "timestamp_src","timestamp_accuracy","index","runtime","caa","freq",
+        # FAA RID enrichment (optional; blanks if not available)
+        "rid_make","rid_model","rid_status","rid_tracking","rid_source"
     ]
     if args.include_system_location:
         headers.extend(["system_id","system_lat","system_lon","system_alt"])
@@ -282,9 +342,39 @@ def main():
                     continue
 
                 drone_id = parsed["id"]
+                serial_number = drone_id[len("drone-"):] if drone_id.startswith("drone-") else drone_id
                 now_ts = time.time()
                 cur = {"t": now_ts, "lat": parsed["lat"], "lon": parsed["lon"], "alt": parsed["alt"], "speed": parsed["speed"]}
                 prev = last_logged.get(drone_id)
+
+                # FAA RID lookup (local sync; optional async API)
+                rid_info = {}
+                if rid_lookup_enabled and serial_number:
+                    if serial_number in rid_cache:
+                        rid_info = rid_cache[serial_number]
+                    else:
+                        try:
+                            res = lookup_serial(serial_number, use_api_fallback=False)  # type: ignore
+                            rid_cache[serial_number] = res
+                            rid_info = res
+                        except FileNotFoundError as e:
+                            if not rid_failure_logged:
+                                logger.warning(f"RID lookup disabled (database missing?): {e}")
+                                rid_failure_logged = True
+                            rid_lookup_enabled = False
+                        except Exception as e:
+                            if not rid_failure_logged:
+                                logger.warning(f"RID lookup failed; disabling: {e}")
+                                rid_failure_logged = True
+                            rid_lookup_enabled = False
+
+                        if rid_api_enabled and rid_lookup_enabled and not rid_info.get("found") and serial_number not in rid_pending:
+                            rid_pending.add(serial_number)
+                            try:
+                                rid_queue.put_nowait(serial_number)
+                            except Exception as qe:
+                                rid_pending.discard(serial_number)
+                                logger.debug(f"Failed to enqueue RID lookup: {qe}")
 
                 if should_log(prev, cur, th):
                     row = [
@@ -300,7 +390,10 @@ def main():
                         parsed["vertical_accuracy"], parsed["horizontal_accuracy"], parsed["baro_accuracy"],
                         parsed["speed_accuracy"],
                         parsed["timestamp"], parsed["timestamp_accuracy"], parsed["index"], parsed["runtime"],
-                        parsed["caa"], parsed["freq"]
+                        parsed["caa"], parsed["freq"],
+                        # FAA RID enrichment (blanks when not present)
+                        rid_info.get("make"), rid_info.get("model"), rid_info.get("status"),
+                        rid_info.get("rid_tracking"), rid_info.get("source")
                     ]
                     if args.include_system_location:
                         row.extend([system_location["id"], system_location["lat"], system_location["lon"], system_location["alt"]])
@@ -323,6 +416,12 @@ def main():
             csv_writer.writerows(buf)
         csv_file.flush()
         csv_file.close()
+        # Stop RID worker
+        try:
+            if rid_api_enabled and rid_thread and rid_thread.is_alive():
+                rid_queue.put_nowait(None)
+        except Exception:
+            pass
         try:
             socket.close(0)
             if status_socket:
