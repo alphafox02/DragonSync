@@ -380,6 +380,11 @@ class MqttSink:
         state = {
             "id": g("id", "unknown"),
             "description": g("description", ""),
+            "rid_make": g("rid_make", None),
+            "rid_model": g("rid_model", None),
+            "rid_status": g("rid_status", None),
+            "rid_tracking": g("rid_tracking", None),
+            "rid_source": g("rid_source", None),
 
             # existing keys used elsewhere
             "lat": _f(g("lat", 0.0)),
@@ -715,4 +720,3 @@ def _json_default(o):
         return str(o)
     except Exception:
         return None
-
