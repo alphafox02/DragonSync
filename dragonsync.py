@@ -68,6 +68,7 @@ _rid_lookup_enabled = _FAA_LOOKUP_AVAILABLE
 _rid_lookup_failure_logged = False
 _rid_lookup_queue: Optional[Queue] = None
 _rid_lookup_worker: Optional[threading.Thread] = None
+_rid_api_enabled = False  # API fallback off by default unless enabled via config
 _rid_queue_max = 100  # drop API fallback when backlog exceeds this
 _rid_rate_limit = 1.0  # seconds between FAA API calls
 _rid_last_api_time = 0.0
@@ -78,7 +79,7 @@ _rid_miss_cache_max = 1000
 def _start_rid_lookup_worker() -> None:
     """Start a background worker for FAA API fallback."""
     global _rid_lookup_queue, _rid_lookup_worker
-    if not _rid_lookup_enabled:
+    if not _rid_lookup_enabled or not _rid_api_enabled:
         return
     if _rid_lookup_queue is None:
         _rid_lookup_queue = Queue()
@@ -135,7 +136,7 @@ def _start_rid_lookup_worker() -> None:
 
 def _queue_rid_lookup(drone_obj: Drone, serial_number: str) -> None:
     """Queue a background RID lookup (API fallback) without blocking main loop."""
-    if not _rid_lookup_enabled or lookup_serial is None or not serial_number:
+    if not _rid_lookup_enabled or not _rid_api_enabled or lookup_serial is None or not serial_number:
         return
     if drone_obj.rid_lookup_pending:
         return
@@ -803,10 +804,6 @@ if __name__ == "__main__":
     if args.config:
         config_values = load_config(args.config)
 
-    setup_logging(args.debug)
-    logger.info("Starting ZMQ to CoT converter with log level: %s", "DEBUG" if args.debug else "INFO")
-    _start_rid_lookup_worker()
-
     # Retrieve 'tak_host' and 'tak_port' with precedence
     tak_host = args.tak_host if args.tak_host is not None else get_str(config_values.get("tak_host"))
     tak_port = args.tak_port if args.tak_port is not None else get_int(config_values.get("tak_port"), None)
@@ -895,7 +892,16 @@ if __name__ == "__main__":
         "adsb_rate_limit": get_float(config_values.get("adsb_rate_limit", 3.0)),
         "adsb_min_alt": get_int(config_values.get("adsb_min_alt", 0)),
         "adsb_max_alt": get_int(config_values.get("adsb_max_alt", 0)),
+        # FAA RID API fallback (disabled by default; local DB still used)
+        "rid_api_enabled": get_bool(config_values.get("rid_api_enabled"), False),
     }
+
+    # Configure RID API fallback toggle
+    _rid_api_enabled = bool(config.get("rid_api_enabled", False))
+
+    setup_logging(args.debug)
+    logger.info("Starting ZMQ to CoT converter with log level: %s", "DEBUG" if args.debug else "INFO")
+    _start_rid_lookup_worker()
 
     
     # Validate configuration
