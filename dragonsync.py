@@ -68,6 +68,11 @@ _rid_lookup_enabled = _FAA_LOOKUP_AVAILABLE
 _rid_lookup_failure_logged = False
 _rid_lookup_queue: Optional[Queue] = None
 _rid_lookup_worker: Optional[threading.Thread] = None
+_rid_queue_max = 100  # drop API fallback when backlog exceeds this
+_rid_rate_limit = 1.0  # seconds between FAA API calls
+_rid_last_api_time = 0.0
+_rid_miss_cache = set()  # serials that returned no result
+_rid_miss_cache_max = 1000
 
 
 def _start_rid_lookup_worker() -> None:
@@ -81,14 +86,27 @@ def _start_rid_lookup_worker() -> None:
         return
 
     def _worker():
-        global _rid_lookup_enabled, _rid_lookup_failure_logged
+        global _rid_lookup_enabled, _rid_lookup_failure_logged, _rid_last_api_time
         while True:
             item = _rid_lookup_queue.get()
             if item is None:
                 break
             drone_obj, serial_number = item
             try:
+                # rate limit API calls
+                now = time.time()
+                delta = now - _rid_last_api_time
+                if delta < _rid_rate_limit:
+                    time.sleep(_rid_rate_limit - delta)
+
                 res = lookup_serial(serial_number, use_api_fallback=True, add_to_db=True)  # type: ignore
+                _rid_last_api_time = time.time()
+
+                # cache misses to avoid repeat API hits
+                if not res.get("found"):
+                    if len(_rid_miss_cache) >= _rid_miss_cache_max:
+                        _rid_miss_cache.pop()
+                    _rid_miss_cache.add(serial_number)
             except FileNotFoundError as e:
                 if not _rid_lookup_failure_logged:
                     logger.warning("FAA RID lookup skipped (database missing?): %s", e)
@@ -123,6 +141,14 @@ def _queue_rid_lookup(drone_obj: Drone, serial_number: str) -> None:
         return
     if _rid_lookup_queue is None:
         return
+    if serial_number in _rid_miss_cache:
+        return
+    try:
+        if _rid_lookup_queue.qsize() >= _rid_queue_max:
+            logger.debug("RID API queue full; skipping fallback for %s", serial_number)
+            return
+    except Exception:
+        pass
 
     drone_obj.rid_lookup_pending = True
     drone_obj.rid_lookup_attempted = True  # prevent re-queueing

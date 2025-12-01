@@ -226,18 +226,34 @@ def main():
     rid_api_enabled = rid_lookup_enabled and args.rid_api
     rid_cache = {}
     rid_pending = set()
+    rid_miss_cache = set()
+    rid_miss_cache_max = 1000
     rid_failure_logged = False
     rid_queue: Queue = Queue()
+    rid_queue_max = 100
+    rid_rate_limit = 1.0
+    rid_last_api_time = 0.0
 
     def rid_worker():
-        nonlocal rid_lookup_enabled, rid_failure_logged
+        nonlocal rid_lookup_enabled, rid_failure_logged, rid_last_api_time
         while True:
             item = rid_queue.get()
             if item is None:
                 break
             serial = item
             try:
+                # rate limit
+                now = time.time()
+                delta = now - rid_last_api_time
+                if delta < rid_rate_limit:
+                    time.sleep(rid_rate_limit - delta)
+
                 res = lookup_serial(serial, use_api_fallback=True, add_to_db=True)  # type: ignore
+                rid_last_api_time = time.time()
+                if not res.get("found"):
+                    if len(rid_miss_cache) >= rid_miss_cache_max:
+                        rid_miss_cache.pop()
+                    rid_miss_cache.add(serial)
                 rid_cache[serial] = res
             except FileNotFoundError as e:
                 if not rid_failure_logged:
@@ -476,12 +492,17 @@ def main():
                             rid_lookup_enabled = False
 
                         if rid_api_enabled and rid_lookup_enabled and not rid_info.get("found") and serial_number not in rid_pending:
-                            rid_pending.add(serial_number)
-                            try:
-                                rid_queue.put_nowait(serial_number)
-                            except Exception as qe:
-                                rid_pending.discard(serial_number)
-                                logger.debug(f"Failed to enqueue RID lookup: {qe}")
+                            if serial_number in rid_miss_cache:
+                                pass
+                            elif rid_queue.qsize() >= rid_queue_max:
+                                logger.debug("RID queue full; skipping API fallback for %s", serial_number)
+                            else:
+                                rid_pending.add(serial_number)
+                                try:
+                                    rid_queue.put_nowait(serial_number)
+                                except Exception as qe:
+                                    rid_pending.discard(serial_number)
+                                    logger.debug(f"Failed to enqueue RID lookup: {qe}")
 
                 if should_log(prev, cur, th, log_every=log_every):
                     row_base = [
