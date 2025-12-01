@@ -137,6 +137,7 @@ def _apply_rid_lookup(drone_obj: Drone, serial_number: str) -> None:
     """
     Perform a local DB lookup synchronously; if not found, queue API fallback asynchronously.
     """
+    global _rid_lookup_enabled, _rid_lookup_failure_logged
     if not _rid_lookup_enabled or lookup_serial is None or not serial_number:
         return
     if drone_obj.rid_lookup_success or drone_obj.rid_lookup_pending:
