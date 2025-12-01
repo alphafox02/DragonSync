@@ -103,6 +103,16 @@ INDEX_HTML = """<!doctype html>
           <tbody id="rows"></tbody>
         </table>
       </div>
+      <div id="history" class="panel" style="border-top:1px solid #1f2937;">
+        <h3>History</h3>
+        <div class="muted" id="history-title">Click a row to load history for that drone</div>
+        <div id="history-table" style="max-height:220px; overflow:auto;">
+          <table>
+            <thead><tr><th>Time (UTC)</th><th>Lat</th><th>Lon</th><th>Alt</th><th>RID</th><th>Source</th></tr></thead>
+            <tbody id="history-rows"></tbody>
+          </table>
+        </div>
+      </div>
     </section>
   </div>
 
@@ -112,7 +122,10 @@ INDEX_HTML = """<!doctype html>
     const canvas = document.getElementById('mapCanvas');
     const ctx = canvas.getContext('2d');
     const legendEl = document.getElementById('legend');
+    const historyRowsEl = document.getElementById('history-rows');
+    const historyTitleEl = document.getElementById('history-title');
     let records = [];
+    let latestSelection = null;
 
     function fitCanvas() {
       const rect = canvas.parentElement.getBoundingClientRect();
@@ -203,6 +216,7 @@ INDEX_HTML = """<!doctype html>
       const frag = document.createDocumentFragment();
       records.forEach(r=>{
         const tr = document.createElement('tr');
+        tr.dataset.drone = r.drone_id;
         tr.innerHTML = `
           <td>${r.ts}</td>
           <td>${r.drone_id}</td>
@@ -213,6 +227,10 @@ INDEX_HTML = """<!doctype html>
           <td>${(r.rid_make||'') + ' ' + (r.rid_model||'')}</td>
           <td>${r.rid_source||''}</td>
         `;
+        tr.addEventListener('click', ()=> {
+          latestSelection = r.drone_id;
+          fetchHistory(r.drone_id);
+        });
         frag.appendChild(tr);
       });
       rowsEl.appendChild(frag);
@@ -237,6 +255,34 @@ INDEX_HTML = """<!doctype html>
       fitCanvas();
       drawMap();
       renderTable();
+    }
+
+    async function fetchHistory(droneId) {
+      const params = new URLSearchParams();
+      params.set('drone_id', droneId);
+      params.set('limit', '500');
+      const res = await fetch('/api/history?' + params.toString());
+      if (!res.ok) {
+        alert('Failed to fetch history');
+        return;
+      }
+      const hist = await res.json();
+      historyRowsEl.innerHTML = '';
+      const frag = document.createDocumentFragment();
+      hist.forEach(r => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${r.ts}</td>
+          <td>${r.lat.toFixed(5)}</td>
+          <td>${r.lon.toFixed(5)}</td>
+          <td>${(r.alt ?? 0).toFixed(1)}</td>
+          <td>${(r.rid_make||'') + ' ' + (r.rid_model||'')}</td>
+          <td>${r.rid_source||''}</td>
+        `;
+        frag.appendChild(tr);
+      });
+      historyRowsEl.appendChild(frag);
+      historyTitleEl.textContent = `History for ${droneId} (${hist.length} rows)`;
     }
 
     document.getElementById('btn-apply').addEventListener('click', loadRecords);
@@ -314,6 +360,36 @@ def fetch_records(conn, filters, default_limit=500):
     return out
 
 
+def fetch_history(conn, drone_id, limit=500):
+    limit = max(1, min(int(limit or 500), 5000))
+    sql = """
+        SELECT ts, drone_id, lat, lon, alt, speed, rssi, mac, description,
+               pilot_lat, pilot_lon, home_lat, home_lon, ua_type, ua_type_name,
+               operator_id_type, operator_id, op_status,
+               height, height_type, direction, vspeed, ew_dir, speed_multiplier, pressure_altitude,
+               vertical_accuracy, horizontal_accuracy, baro_accuracy, speed_accuracy,
+               timestamp_src, timestamp_accuracy, idx, runtime, caa, freq,
+               rid_make, rid_model, rid_source
+        FROM logs
+        WHERE drone_id = ?
+        ORDER BY ts DESC
+        LIMIT ?
+    """
+    cur = conn.execute(sql, (drone_id, limit))
+    rows = cur.fetchall()
+    cols = [c[0] for c in cur.description]
+    out = []
+    for row in rows:
+        obj = dict(zip(cols, row))
+        for key in ["lat", "lon", "alt", "speed"]:
+            try:
+                obj[key] = float(obj.get(key) or 0.0)
+            except Exception:
+                obj[key] = 0.0
+        out.append(obj)
+    return out
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -328,6 +404,26 @@ class Handler(BaseHTTPRequestHandler):
             filters = parse_filters(query)
             try:
                 records = fetch_records(self.server.conn, filters)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps(records).encode("utf-8"))
+            except Exception as e:
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
+            return
+        elif parsed.path == "/api/history":
+            query = parse_qs(parsed.query)
+            drone_id = query.get("drone_id", [None])[0]
+            limit = query.get("limit", [500])[0]
+            if not drone_id:
+                self.send_response(400)
+                self.end_headers()
+                return
+            try:
+                records = fetch_history(self.server.conn, drone_id, limit)
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()

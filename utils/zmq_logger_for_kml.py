@@ -145,7 +145,7 @@ def parse_drone_message(message, logger):
 
     return drone_info
 
-def should_log(prev, cur, th):
+def should_log(prev, cur, th, log_every=0.0):
     if prev is None:
         return True
     dist = haversine_m(prev["lat"], prev["lon"], cur["lat"], cur["lon"])
@@ -155,7 +155,10 @@ def should_log(prev, cur, th):
         return True
     if th["min_speed_change"] and abs(cur["speed"] - prev["speed"]) >= th["min_speed_change"]:
         return True
-    if th["min_log_interval"] and (cur["t"] - prev["t"]) >= th["min_log_interval"]:
+    dt = cur["t"] - prev["t"]
+    if th["min_log_interval"] and dt >= th["min_log_interval"]:
+        return True
+    if log_every and dt >= log_every:
         return True
     return False
 
@@ -178,6 +181,7 @@ def main():
     parser.add_argument("--min-move-m", type=float, default=25.0, help="Minimum movement to trigger log (meters)")
     parser.add_argument("--min-alt-change", type=float, default=5.0, help="Minimum altitude change to trigger log (meters)")
     parser.add_argument("--min-speed-change", type=float, default=1.0, help="Minimum speed change to trigger log (m/s)")
+    parser.add_argument("--log-every", type=float, default=0.0, help="Optional hard log interval (seconds) regardless of movement; 0=disabled")
 
     # FAA RID lookup (local DB sync, optional API async)
     parser.add_argument("--rid-enabled", action="store_true", help="Enrich rows with FAA RID lookup (local DB).")
@@ -410,6 +414,7 @@ def main():
         "min_alt_change": max(0.0, args.min_alt_change),
         "min_speed_change": max(0.0, args.min_speed_change),
     }
+    log_every = max(0.0, args.log_every)
 
     try:
         while True:
@@ -478,7 +483,7 @@ def main():
                                 rid_pending.discard(serial_number)
                                 logger.debug(f"Failed to enqueue RID lookup: {qe}")
 
-                if should_log(prev, cur, th):
+                if should_log(prev, cur, th, log_every=log_every):
                     row_base = [
                         datetime.utcnow().isoformat(),
                         drone_id,
