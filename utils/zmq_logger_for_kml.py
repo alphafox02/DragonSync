@@ -290,7 +290,8 @@ def main():
         "rid_make","rid_model","rid_status","rid_tracking","rid_source"
     ]
 
-    sqlite_insert_sql = """
+    SQLITE_PLACEHOLDERS = ",".join(["?"] * 40)
+    sqlite_insert_sql = f"""
         INSERT INTO logs (
             ts, drone_id, lat, lon, alt, speed, rssi, mac, description, pilot_lat, pilot_lon,
             home_lat, home_lon, ua_type, ua_type_name, operator_id_type, operator_id, op_status,
@@ -298,14 +299,7 @@ def main():
             vertical_accuracy, horizontal_accuracy, baro_accuracy, speed_accuracy,
             timestamp_src, timestamp_accuracy, idx, runtime, caa, freq,
             rid_make, rid_model, rid_status, rid_tracking, rid_source
-        ) VALUES (
-            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-            ?, ?, ?, ?, ?, ?, 
-            ?, ?, ?, ?, ?, ?, ?,
-            ?, ?, ?, ?,
-            ?, ?, ?, ?, ?, ?,
-            ?, ?, ?, ?, ?
-        )
+        ) VALUES ({SQLITE_PLACEHOLDERS})
     """
     if args.include_system_location:
         headers.extend(["system_id","system_lat","system_lon","system_alt"])
@@ -402,7 +396,8 @@ def main():
     if args.sqlite:
         _sqlite_open()
 
-    buf = []
+    buf_csv = []
+    buf_sqlite = []
     last_flush = time.time()
     last_logged = {}  # drone_id -> snapshot
 
@@ -484,7 +479,7 @@ def main():
                                 logger.debug(f"Failed to enqueue RID lookup: {qe}")
 
                 if should_log(prev, cur, th):
-                    row = [
+                    row_base = [
                         datetime.utcnow().isoformat(),
                         drone_id,
                         parsed["lat"], parsed["lon"], parsed["alt"], parsed["speed"],
@@ -502,40 +497,48 @@ def main():
                         rid_info.get("make"), rid_info.get("model"), rid_info.get("status"),
                         rid_info.get("rid_tracking"), rid_info.get("source")
                     ]
+                    csv_row = list(row_base)
                     if args.include_system_location:
-                        row.extend([system_location["id"], system_location["lat"], system_location["lon"], system_location["alt"]])
-                    buf.append(row)
+                        csv_row.extend([system_location["id"], system_location["lat"], system_location["lon"], system_location["alt"]])
+                    if csv_writer:
+                        buf_csv.append(csv_row)
+                    if sqlite_cur:
+                        buf_sqlite.append(row_base)
                     last_logged[drone_id] = cur
                     logger.debug(f"Queued log for {drone_id}")
 
             now = time.time()
-            if (now - last_flush) >= args.flush_interval and buf:
-                logger.debug(f"Flushing {len(buf)} rows")
-                if csv_writer:
-                    csv_writer.writerows(buf)
+            if (now - last_flush) >= args.flush_interval and (buf_csv or buf_sqlite):
+                if csv_writer and buf_csv:
+                    logger.debug(f"Flushing {len(buf_csv)} CSV rows")
+                    csv_writer.writerows(buf_csv)
                     csv_file.flush()
-                if sqlite_cur:
+                    buf_csv.clear()
+                if sqlite_cur and buf_sqlite:
+                    logger.debug(f"Flushing {len(buf_sqlite)} SQLite rows")
                     _sqlite_open()
                     try:
-                        sqlite_cur.executemany(sqlite_insert_sql, buf)
+                        sqlite_cur.executemany(sqlite_insert_sql, buf_sqlite)
                         sqlite_conn.commit()
                     except Exception as e:
                         logger.warning(f"SQLite write failed: {e}")
-                buf.clear()
+                    buf_sqlite.clear()
                 last_flush = now
 
     except KeyboardInterrupt:
         logger.info("Interrupted by user.")
     finally:
-        if buf:
-            if csv_writer:
-                csv_writer.writerows(buf)
-            if sqlite_cur:
-                try:
-                    sqlite_cur.executemany(sqlite_insert_sql, buf)
-                    sqlite_conn.commit()
-                except Exception as e:
-                    logger.warning(f"SQLite final flush failed: {e}")
+        if csv_writer and buf_csv:
+            try:
+                csv_writer.writerows(buf_csv)
+            except Exception as e:
+                logger.warning(f"CSV final flush failed: {e}")
+        if sqlite_cur and buf_sqlite:
+            try:
+                sqlite_cur.executemany(sqlite_insert_sql, buf_sqlite)
+                sqlite_conn.commit()
+            except Exception as e:
+                logger.warning(f"SQLite final flush failed: {e}")
         if csv_file:
             csv_file.flush()
             csv_file.close()
