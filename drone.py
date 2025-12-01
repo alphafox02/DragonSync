@@ -135,6 +135,16 @@ class Drone:
         self.last_keepalive_time = 0.0
         self.freq: Optional[float] = freq
 
+        # FAA Remote ID lookup cache (per-drone, in-memory only)
+        self.rid_tracking: Optional[str] = None
+        self.rid_status: Optional[str] = None
+        self.rid_make: Optional[str] = None
+        self.rid_model: Optional[str] = None
+        self.rid_source: Optional[str] = None
+        self.rid_lookup_attempted: bool = False
+        self.rid_lookup_success: bool = False
+        self.rid_lookup_pending: bool = False
+
     def update(
         self,
         lat: float,
@@ -324,9 +334,26 @@ class Drone:
         if self.id == "drone-alert":
             remarks += "; Alert: Unknown DJI OcuSync format (Encrypted/Partial)"
 
+        # FAA RID lookup enrichment (if available)
+        if self.rid_make or self.rid_model:
+            rid_label = f"{self.rid_make or ''} {self.rid_model or ''}".strip()
+            if rid_label:
+                remarks += f"; RID: {rid_label}"
+        if self.rid_source:
+            remarks += f"; RID Source: {self.rid_source}"
+
         etree.SubElement(detail, 'remarks').text = xml.sax.saxutils.escape(remarks)
         etree.SubElement(detail, 'color', argb='-256')
         # dropped <usericon> so icon derives from event type
+
+        # Structured RID block for ATAK details/raw views
+        rid = etree.SubElement(detail, 'rid')
+        if self.rid_make:
+            rid.set('make', self.rid_make)
+        if self.rid_model:
+            rid.set('model', self.rid_model)
+        if self.rid_source:
+            rid.set('source', self.rid_source)
 
         xml_bytes = etree.tostring(event, pretty_print=True,
                                    xml_declaration=True, encoding='UTF-8')
@@ -448,3 +475,17 @@ class Drone:
                                    xml_declaration=True, encoding='UTF-8')
         logger.debug("CoT XML for home '%s':\n%s", self.id, xml_bytes.decode('utf-8'))
         return xml_bytes
+
+    def apply_rid_lookup_result(self, lookup: dict) -> None:
+        """Cache FAA RID lookup results on the drone to avoid repeat queries."""
+        self.rid_lookup_attempted = True
+        self.rid_lookup_success = bool(lookup.get("found", False))
+
+        if not self.rid_lookup_success:
+            return
+
+        self.rid_tracking = lookup.get("rid_tracking")
+        self.rid_status = lookup.get("status")
+        self.rid_make = lookup.get("make")
+        self.rid_model = lookup.get("model")
+        self.rid_source = lookup.get("source")

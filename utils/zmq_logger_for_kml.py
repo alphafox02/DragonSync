@@ -5,6 +5,11 @@ import time
 import zmq
 import csv
 import os
+import sys
+import threading
+import sqlite3
+from queue import Queue
+from pathlib import Path
 from datetime import datetime
 from math import radians, sin, cos, asin, sqrt
 
@@ -140,7 +145,7 @@ def parse_drone_message(message, logger):
 
     return drone_info
 
-def should_log(prev, cur, th):
+def should_log(prev, cur, th, log_every=0.0):
     if prev is None:
         return True
     dist = haversine_m(prev["lat"], prev["lon"], cur["lat"], cur["lon"])
@@ -150,7 +155,10 @@ def should_log(prev, cur, th):
         return True
     if th["min_speed_change"] and abs(cur["speed"] - prev["speed"]) >= th["min_speed_change"]:
         return True
-    if th["min_log_interval"] and (cur["t"] - prev["t"]) >= th["min_log_interval"]:
+    dt = cur["t"] - prev["t"]
+    if th["min_log_interval"] and dt >= th["min_log_interval"]:
+        return True
+    if log_every and dt >= log_every:
         return True
     return False
 
@@ -160,7 +168,10 @@ def main():
     parser.add_argument("--zmq-port", type=int, default=4224)
     parser.add_argument("--zmq-status-port", type=int, default=None, help="ZMQ port for system status (default: disabled)")
     parser.add_argument("--include-system-location", action="store_true", help="Include system location in CSV (requires --zmq-status-port)")
-    parser.add_argument("--output-csv", default=None, help="Output CSV file path. If not specified, creates timestamped file.")
+    parser.add_argument("--output-csv", default=None, help="Output CSV file path. If not specified and --sqlite not set, creates timestamped file.")
+    parser.add_argument("--sqlite", default=None, help="Optional SQLite log file path. When set, logs are stored in SQLite instead of CSV unless --output-csv is also provided.")
+    parser.add_argument("--sqlite-rotate-daily", action="store_true", help="When using --sqlite, write to per-day files (name_YYYYMMDD.sqlite).")
+    parser.add_argument("--sqlite-retain-days", type=int, default=0, help="When rotating, delete SQLite files older than this many days (0=keep all).")
     parser.add_argument("--flush-interval", type=float, default=5.0, help="Flush CSV buffer interval (seconds)")
     parser.add_argument("--rcv-hwm", type=int, default=0, help="ZMQ receive high water mark (0=unlimited)")
     parser.add_argument("--conflate", action="store_true", help="Keep only latest message (drop backlog)")
@@ -170,6 +181,11 @@ def main():
     parser.add_argument("--min-move-m", type=float, default=25.0, help="Minimum movement to trigger log (meters)")
     parser.add_argument("--min-alt-change", type=float, default=5.0, help="Minimum altitude change to trigger log (meters)")
     parser.add_argument("--min-speed-change", type=float, default=1.0, help="Minimum speed change to trigger log (m/s)")
+    parser.add_argument("--log-every", type=float, default=0.0, help="Optional hard log interval (seconds) regardless of movement; 0=disabled")
+
+    # FAA RID lookup (local DB sync, optional API async)
+    parser.add_argument("--rid-enabled", action="store_true", help="Enrich rows with FAA RID lookup (local DB).")
+    parser.add_argument("--rid-api", action="store_true", help="Enable FAA API fallback (async; requires --rid-enabled).")
 
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
@@ -178,15 +194,84 @@ def main():
                         format="%(asctime)s - %(levelname)s - %(message)s")
     logger = logging.getLogger(__name__)
 
-    # Generate timestamped filename if --output-csv not specified
-    if args.output_csv is None:
+    # Generate timestamped filename if CSV is desired and not specified
+    if args.output_csv is None and not args.sqlite:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_csv = f"drone_log_{timestamp}.csv"
     else:
         output_csv = args.output_csv
 
-    logger.info(f"Output CSV: {output_csv}")
+    if output_csv:
+        logger.info(f"Output CSV: {output_csv}")
+    if args.sqlite:
+        logger.info(f"Output SQLite: {args.sqlite} (rotate daily: {args.sqlite_rotate_daily})")
     logger.info(f"Connecting to ZMQ at tcp://{args.zmq_host}:{args.zmq_port}")
+
+    # FAA RID lookup setup (optional)
+    FAA_LOOKUP_AVAILABLE = False
+    lookup_serial = None
+    if args.rid_enabled:
+        try:
+            faa_path = Path(__file__).resolve().parent.parent / "faa-rid-lookup"
+            if faa_path.exists():
+                sys.path.append(str(faa_path))
+            from drone_serial_lookup import lookup_serial as _lookup_serial  # type: ignore
+            lookup_serial = _lookup_serial
+            FAA_LOOKUP_AVAILABLE = True
+        except Exception as e:
+            logger.warning(f"RID lookup disabled (module unavailable): {e}")
+            FAA_LOOKUP_AVAILABLE = False
+
+    rid_lookup_enabled = FAA_LOOKUP_AVAILABLE and args.rid_enabled
+    rid_api_enabled = rid_lookup_enabled and args.rid_api
+    rid_cache = {}
+    rid_pending = set()
+    rid_miss_cache = set()
+    rid_miss_cache_max = 1000
+    rid_failure_logged = False
+    rid_queue: Queue = Queue()
+    rid_queue_max = 100
+    rid_rate_limit = 1.0
+    rid_last_api_time = 0.0
+
+    def rid_worker():
+        nonlocal rid_lookup_enabled, rid_failure_logged, rid_last_api_time
+        while True:
+            item = rid_queue.get()
+            if item is None:
+                break
+            serial = item
+            try:
+                # rate limit
+                now = time.time()
+                delta = now - rid_last_api_time
+                if delta < rid_rate_limit:
+                    time.sleep(rid_rate_limit - delta)
+
+                res = lookup_serial(serial, use_api_fallback=True, add_to_db=True)  # type: ignore
+                rid_last_api_time = time.time()
+                if not res.get("found"):
+                    if len(rid_miss_cache) >= rid_miss_cache_max:
+                        rid_miss_cache.pop()
+                    rid_miss_cache.add(serial)
+                rid_cache[serial] = res
+            except FileNotFoundError as e:
+                if not rid_failure_logged:
+                    logger.warning(f"RID lookup disabled (database missing?): {e}")
+                    rid_failure_logged = True
+                rid_lookup_enabled = False
+            except Exception as e:
+                if not rid_failure_logged:
+                    logger.warning(f"RID lookup failed; disabling: {e}")
+                    rid_failure_logged = True
+                rid_lookup_enabled = False
+            finally:
+                rid_pending.discard(serial)
+
+    rid_thread = None
+    if rid_api_enabled:
+        rid_thread = threading.Thread(target=rid_worker, daemon=True, name="rid_lookup_worker")
+        rid_thread.start()
 
     context = zmq.Context()
     socket = context.socket(zmq.SUB)
@@ -220,22 +305,119 @@ def main():
         "home_lat","home_lon","ua_type","ua_type_name","operator_id_type","operator_id","op_status",
         "height","height_type","direction","vspeed","ew_dir","speed_multiplier","pressure_altitude",
         "vertical_accuracy","horizontal_accuracy","baro_accuracy","speed_accuracy",
-        "timestamp_src","timestamp_accuracy","index","runtime","caa","freq"
+        "timestamp_src","timestamp_accuracy","index","runtime","caa","freq",
+        # FAA RID enrichment (optional; blanks if not available)
+        "rid_make","rid_model","rid_source"
     ]
+
+    SQLITE_PLACEHOLDERS = ",".join(["?"] * 38)
+    sqlite_insert_sql = f"""
+        INSERT INTO logs (
+            ts, drone_id, lat, lon, alt, speed, rssi, mac, description, pilot_lat, pilot_lon,
+            home_lat, home_lon, ua_type, ua_type_name, operator_id_type, operator_id, op_status,
+            height, height_type, direction, vspeed, ew_dir, speed_multiplier, pressure_altitude,
+            vertical_accuracy, horizontal_accuracy, baro_accuracy, speed_accuracy,
+            timestamp_src, timestamp_accuracy, idx, runtime, caa, freq,
+            rid_make, rid_model, rid_source
+        ) VALUES ({SQLITE_PLACEHOLDERS})
+    """
     if args.include_system_location:
         headers.extend(["system_id","system_lat","system_lon","system_alt"])
 
-    # Check if file exists and has content to determine if we need to write headers
-    file_exists = os.path.exists(output_csv)
-    file_is_empty = not file_exists or os.path.getsize(output_csv) == 0
-    csv_file = open(output_csv, 'a', newline='')
-    csv_writer = csv.writer(csv_file)
-    if file_is_empty:
-        logger.info("Writing CSV headers to new file")
-        csv_writer.writerow(headers)
-        csv_file.flush()  # Ensure header is written immediately
+    # CSV setup (optional)
+    csv_writer = None
+    csv_file = None
+    if output_csv:
+        file_exists = os.path.exists(output_csv)
+        file_is_empty = not file_exists or os.path.getsize(output_csv) == 0
+        csv_file = open(output_csv, 'a', newline='')
+        csv_writer = csv.writer(csv_file)
+        if file_is_empty:
+            logger.info("Writing CSV headers to new file")
+            csv_writer.writerow(headers)
+            csv_file.flush()  # Ensure header is written immediately
 
-    buf = []
+    # SQLite setup (optional)
+    sqlite_path_base = args.sqlite
+    sqlite_conn = None
+    sqlite_cur = None
+    sqlite_day = None
+
+    def _sqlite_path_for_today():
+        if not sqlite_path_base:
+            return None
+        if not args.sqlite_rotate_daily:
+            return sqlite_path_base
+        stem, ext = os.path.splitext(sqlite_path_base)
+        return f"{stem}_{datetime.utcnow().strftime('%Y%m%d')}{ext or '.sqlite'}"
+
+    def _sqlite_prune_old():
+        if not args.sqlite_rotate_daily or args.sqlite_retain_days <= 0:
+            return
+        try:
+            stem, ext = os.path.splitext(sqlite_path_base)
+            prefix = f"{stem}_"
+            for fname in os.listdir(os.path.dirname(sqlite_path_base) or "."):
+                if not fname.startswith(os.path.basename(prefix)) or not fname.endswith(ext or ".sqlite"):
+                    continue
+                date_part = fname[len(os.path.basename(prefix)) : -len(ext or ".sqlite")]
+                try:
+                    dt_obj = datetime.strptime(date_part, "%Y%m%d")
+                except Exception:
+                    continue
+                age_days = (datetime.utcnow() - dt_obj).days
+                if age_days > args.sqlite_retain_days:
+                    try:
+                        os.remove(os.path.join(os.path.dirname(sqlite_path_base), fname))
+                        logger.info(f"Pruned old SQLite log: {fname}")
+                    except Exception as e:
+                        logger.debug(f"Failed to prune {fname}: {e}")
+        except Exception as e:
+            logger.debug(f"Prune failed: {e}")
+
+    def _sqlite_open():
+        nonlocal sqlite_conn, sqlite_cur, sqlite_day
+        if not sqlite_path_base:
+            return
+        path = _sqlite_path_for_today()
+        day_str = datetime.utcnow().strftime("%Y%m%d")
+        if sqlite_conn and sqlite_day == day_str:
+            return
+        if sqlite_conn:
+            sqlite_conn.commit()
+            sqlite_conn.close()
+        sqlite_day = day_str
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        sqlite_conn = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
+        sqlite_conn.execute("PRAGMA journal_mode=WAL;")
+        sqlite_cur = sqlite_conn.cursor()
+        sqlite_cur.execute("""
+            CREATE TABLE IF NOT EXISTS logs (
+                ts TEXT,
+                drone_id TEXT,
+                lat REAL, lon REAL, alt REAL, speed REAL,
+                rssi REAL, mac TEXT, description TEXT,
+                pilot_lat REAL, pilot_lon REAL,
+                home_lat REAL, home_lon REAL,
+                ua_type TEXT, ua_type_name TEXT,
+                operator_id_type TEXT, operator_id TEXT, op_status TEXT,
+                height REAL, height_type TEXT, direction REAL, vspeed REAL,
+                ew_dir TEXT, speed_multiplier TEXT, pressure_altitude REAL,
+                vertical_accuracy TEXT, horizontal_accuracy TEXT, baro_accuracy TEXT, speed_accuracy TEXT,
+                timestamp_src TEXT, timestamp_accuracy TEXT, idx INTEGER, runtime REAL,
+                caa TEXT, freq REAL,
+                rid_make TEXT, rid_model TEXT, rid_source TEXT
+            )
+        """)
+        sqlite_cur.execute("CREATE INDEX IF NOT EXISTS idx_logs_ts ON logs(ts)")
+        sqlite_cur.execute("CREATE INDEX IF NOT EXISTS idx_logs_drone ON logs(drone_id)")
+        _sqlite_prune_old()
+
+    if args.sqlite:
+        _sqlite_open()
+
+    buf_csv = []
+    buf_sqlite = []
     last_flush = time.time()
     last_logged = {}  # drone_id -> snapshot
 
@@ -248,6 +430,7 @@ def main():
         "min_alt_change": max(0.0, args.min_alt_change),
         "min_speed_change": max(0.0, args.min_speed_change),
     }
+    log_every = max(0.0, args.log_every)
 
     try:
         while True:
@@ -282,12 +465,47 @@ def main():
                     continue
 
                 drone_id = parsed["id"]
+                serial_number = drone_id[len("drone-"):] if drone_id.startswith("drone-") else drone_id
                 now_ts = time.time()
                 cur = {"t": now_ts, "lat": parsed["lat"], "lon": parsed["lon"], "alt": parsed["alt"], "speed": parsed["speed"]}
                 prev = last_logged.get(drone_id)
 
-                if should_log(prev, cur, th):
-                    row = [
+                # FAA RID lookup (local sync; optional async API)
+                rid_info = {}
+                if rid_lookup_enabled and serial_number:
+                    if serial_number in rid_cache:
+                        rid_info = rid_cache[serial_number]
+                    else:
+                        try:
+                            res = lookup_serial(serial_number, use_api_fallback=False)  # type: ignore
+                            rid_cache[serial_number] = res
+                            rid_info = res
+                        except FileNotFoundError as e:
+                            if not rid_failure_logged:
+                                logger.warning(f"RID lookup disabled (database missing?): {e}")
+                                rid_failure_logged = True
+                            rid_lookup_enabled = False
+                        except Exception as e:
+                            if not rid_failure_logged:
+                                logger.warning(f"RID lookup failed; disabling: {e}")
+                                rid_failure_logged = True
+                            rid_lookup_enabled = False
+
+                        if rid_api_enabled and rid_lookup_enabled and not rid_info.get("found") and serial_number not in rid_pending:
+                            if serial_number in rid_miss_cache:
+                                pass
+                            elif rid_queue.qsize() >= rid_queue_max:
+                                logger.debug("RID queue full; skipping API fallback for %s", serial_number)
+                            else:
+                                rid_pending.add(serial_number)
+                                try:
+                                    rid_queue.put_nowait(serial_number)
+                                except Exception as qe:
+                                    rid_pending.discard(serial_number)
+                                    logger.debug(f"Failed to enqueue RID lookup: {qe}")
+
+                if should_log(prev, cur, th, log_every=log_every):
+                    row_base = [
                         datetime.utcnow().isoformat(),
                         drone_id,
                         parsed["lat"], parsed["lon"], parsed["alt"], parsed["speed"],
@@ -300,29 +518,64 @@ def main():
                         parsed["vertical_accuracy"], parsed["horizontal_accuracy"], parsed["baro_accuracy"],
                         parsed["speed_accuracy"],
                         parsed["timestamp"], parsed["timestamp_accuracy"], parsed["index"], parsed["runtime"],
-                        parsed["caa"], parsed["freq"]
+                        parsed["caa"], parsed["freq"],
+                        # FAA RID enrichment (blanks when not present)
+                        rid_info.get("make"), rid_info.get("model"), rid_info.get("source")
                     ]
+                    csv_row = list(row_base)
                     if args.include_system_location:
-                        row.extend([system_location["id"], system_location["lat"], system_location["lon"], system_location["alt"]])
-                    buf.append(row)
+                        csv_row.extend([system_location["id"], system_location["lat"], system_location["lon"], system_location["alt"]])
+                    if csv_writer:
+                        buf_csv.append(csv_row)
+                    if sqlite_cur:
+                        buf_sqlite.append(row_base)
                     last_logged[drone_id] = cur
                     logger.debug(f"Queued log for {drone_id}")
 
             now = time.time()
-            if (now - last_flush) >= args.flush_interval and buf:
-                logger.debug(f"Flushing {len(buf)} rows")
-                csv_writer.writerows(buf)
-                csv_file.flush()
-                buf.clear()
+            if (now - last_flush) >= args.flush_interval and (buf_csv or buf_sqlite):
+                if csv_writer and buf_csv:
+                    logger.debug(f"Flushing {len(buf_csv)} CSV rows")
+                    csv_writer.writerows(buf_csv)
+                    csv_file.flush()
+                    buf_csv.clear()
+                if sqlite_cur and buf_sqlite:
+                    logger.debug(f"Flushing {len(buf_sqlite)} SQLite rows")
+                    _sqlite_open()
+                    try:
+                        sqlite_cur.executemany(sqlite_insert_sql, buf_sqlite)
+                        sqlite_conn.commit()
+                    except Exception as e:
+                        logger.warning(f"SQLite write failed: {e}")
+                    buf_sqlite.clear()
                 last_flush = now
 
     except KeyboardInterrupt:
         logger.info("Interrupted by user.")
     finally:
-        if buf:
-            csv_writer.writerows(buf)
-        csv_file.flush()
-        csv_file.close()
+        if csv_writer and buf_csv:
+            try:
+                csv_writer.writerows(buf_csv)
+            except Exception as e:
+                logger.warning(f"CSV final flush failed: {e}")
+        if sqlite_cur and buf_sqlite:
+            try:
+                sqlite_cur.executemany(sqlite_insert_sql, buf_sqlite)
+                sqlite_conn.commit()
+            except Exception as e:
+                logger.warning(f"SQLite final flush failed: {e}")
+        if csv_file:
+            csv_file.flush()
+            csv_file.close()
+        if sqlite_conn:
+            sqlite_conn.commit()
+            sqlite_conn.close()
+        # Stop RID worker
+        try:
+            if rid_api_enabled and rid_thread and rid_thread.is_alive():
+                rid_queue.put_nowait(None)
+        except Exception:
+            pass
         try:
             socket.close(0)
             if status_socket:

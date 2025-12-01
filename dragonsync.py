@@ -26,6 +26,8 @@ import time
 import threading
 import tempfile
 from typing import Optional, Dict, Any
+from queue import Queue
+from pathlib import Path
 import atexit
 import os
 
@@ -48,6 +50,146 @@ from messaging import CotMessenger
 from utils import load_config, validate_config, get_str, get_int, get_float, get_bool
 from telemetry_parser import parse_drone_info
 from aircraft import adsb_worker_loop
+
+# FAA RID lookup module (bundled as git submodule)
+try:
+    FAA_LOOKUP_PATH = Path(__file__).parent / "faa-rid-lookup"
+    if FAA_LOOKUP_PATH.exists():
+        sys.path.append(str(FAA_LOOKUP_PATH))
+    from drone_serial_lookup import lookup_serial
+    _FAA_LOOKUP_AVAILABLE = True
+except Exception as e:
+    lookup_serial = None  # type: ignore
+    _FAA_LOOKUP_AVAILABLE = False
+    logger.warning("FAA RID lookup module unavailable: %s", e)
+
+# FAA lookup controls and async worker
+_rid_lookup_enabled = _FAA_LOOKUP_AVAILABLE
+_rid_lookup_failure_logged = False
+_rid_lookup_queue: Optional[Queue] = None
+_rid_lookup_worker: Optional[threading.Thread] = None
+_rid_api_enabled = False  # API fallback off by default unless enabled via config
+_rid_queue_max = 100  # drop API fallback when backlog exceeds this
+_rid_rate_limit = 1.0  # seconds between FAA API calls
+_rid_last_api_time = 0.0
+_rid_miss_cache = set()  # serials that returned no result
+_rid_miss_cache_max = 1000
+
+
+def _start_rid_lookup_worker() -> None:
+    """Start a background worker for FAA API fallback."""
+    global _rid_lookup_queue, _rid_lookup_worker
+    if not _rid_lookup_enabled or not _rid_api_enabled:
+        return
+    if _rid_lookup_queue is None:
+        _rid_lookup_queue = Queue()
+    if _rid_lookup_worker and _rid_lookup_worker.is_alive():
+        return
+
+    def _worker():
+        global _rid_lookup_enabled, _rid_lookup_failure_logged, _rid_last_api_time
+        while True:
+            item = _rid_lookup_queue.get()
+            if item is None:
+                break
+            drone_obj, serial_number = item
+            try:
+                # rate limit API calls
+                now = time.time()
+                delta = now - _rid_last_api_time
+                if delta < _rid_rate_limit:
+                    time.sleep(_rid_rate_limit - delta)
+
+                res = lookup_serial(serial_number, use_api_fallback=True, add_to_db=True)  # type: ignore
+                _rid_last_api_time = time.time()
+
+                # cache misses to avoid repeat API hits
+                if not res.get("found"):
+                    if len(_rid_miss_cache) >= _rid_miss_cache_max:
+                        _rid_miss_cache.pop()
+                    _rid_miss_cache.add(serial_number)
+            except FileNotFoundError as e:
+                if not _rid_lookup_failure_logged:
+                    logger.warning("FAA RID lookup skipped (database missing?): %s", e)
+                    _rid_lookup_failure_logged = True
+                _rid_lookup_enabled = False
+                drone_obj.rid_lookup_pending = False
+                continue
+            except Exception as e:
+                if not _rid_lookup_failure_logged:
+                    logger.warning("FAA RID lookup failed; disabling further attempts: %s", e)
+                    _rid_lookup_failure_logged = True
+                _rid_lookup_enabled = False
+                drone_obj.rid_lookup_pending = False
+                continue
+
+            try:
+                drone_obj.apply_rid_lookup_result(res)
+            except Exception as e:
+                logger.debug("RID lookup apply failed for %s: %s", serial_number, e)
+            finally:
+                drone_obj.rid_lookup_pending = False
+
+    _rid_lookup_worker = threading.Thread(target=_worker, daemon=True, name="rid_lookup_worker")
+    _rid_lookup_worker.start()
+
+
+def _queue_rid_lookup(drone_obj: Drone, serial_number: str) -> None:
+    """Queue a background RID lookup (API fallback) without blocking main loop."""
+    if not _rid_lookup_enabled or not _rid_api_enabled or lookup_serial is None or not serial_number:
+        return
+    if drone_obj.rid_lookup_pending:
+        return
+    if _rid_lookup_queue is None:
+        return
+    if serial_number in _rid_miss_cache:
+        return
+    try:
+        if _rid_lookup_queue.qsize() >= _rid_queue_max:
+            logger.debug("RID API queue full; skipping fallback for %s", serial_number)
+            return
+    except Exception:
+        pass
+
+    drone_obj.rid_lookup_pending = True
+    drone_obj.rid_lookup_attempted = True  # prevent re-queueing
+    try:
+        _rid_lookup_queue.put_nowait((drone_obj, serial_number))
+    except Exception as e:
+        drone_obj.rid_lookup_pending = False
+        logger.debug("Failed to enqueue RID lookup for %s: %s", serial_number, e)
+
+
+def _apply_rid_lookup(drone_obj: Drone, serial_number: str) -> None:
+    """
+    Perform a local DB lookup synchronously; if not found, queue API fallback asynchronously.
+    """
+    global _rid_lookup_enabled, _rid_lookup_failure_logged
+    if not _rid_lookup_enabled or lookup_serial is None or not serial_number:
+        return
+    if drone_obj.rid_lookup_success or drone_obj.rid_lookup_pending:
+        return
+
+    # Synchronous local DB only (fast, no network)
+    try:
+        res = lookup_serial(serial_number, use_api_fallback=False)  # type: ignore
+        drone_obj.apply_rid_lookup_result(res)
+    except FileNotFoundError as e:
+        if not _rid_lookup_failure_logged:
+            logger.warning("FAA RID lookup skipped (database missing?): %s", e)
+            _rid_lookup_failure_logged = True
+        _rid_lookup_enabled = False
+        return
+    except Exception as e:
+        if not _rid_lookup_failure_logged:
+            logger.warning("FAA RID lookup failed (local DB); disabling: %s", e)
+            _rid_lookup_failure_logged = True
+        _rid_lookup_enabled = False
+        return
+
+    # If not found locally, queue API fallback in the background
+    if not drone_obj.rid_lookup_success:
+        _queue_rid_lookup(drone_obj, serial_number)
 
 UA_TYPE_MAPPING = {
     0: 'No UA type defined',
@@ -299,6 +441,12 @@ def zmq_to_cot(
                 drone_manager.close()
             except Exception:
                 pass
+        # Stop RID lookup worker
+        try:
+            if _rid_lookup_queue is not None:
+                _rid_lookup_queue.put_nowait(None)
+        except Exception:
+            pass
         try:
             adsb_stop.set()
             if adsb_thread and adsb_thread.is_alive():
@@ -355,11 +503,13 @@ def zmq_to_cot(
                     else:
                         logger.debug(f"Drone id already has prefix: {drone_info['id']}")
                     drone_id = drone_info['id']
+                    serial_number = drone_id[len("drone-"):] if drone_id.startswith("drone-") else drone_id
 
                     logger.debug(f"Drone detailts for id: {drone_id} - {drone_info}")
 
                     if drone_id in drone_manager.drone_dict:
                         drone = drone_manager.drone_dict[drone_id]
+                        _apply_rid_lookup(drone, serial_number)
                         drone.update(
                             lat=drone_info.get('lat', 0.0),
                             lon=drone_info.get('lon', 0.0),
@@ -435,6 +585,7 @@ def zmq_to_cot(
                             caa_id=drone_info.get('caa', ""),
                             freq=drone_info.get('freq')
                         )
+                        _apply_rid_lookup(drone, serial_number)
                         drone_manager.update_or_add_drone(drone_id, drone)
                         logger.debug(f"Added new drone: {drone_id}")
                 else:
@@ -653,9 +804,6 @@ if __name__ == "__main__":
     if args.config:
         config_values = load_config(args.config)
 
-    setup_logging(args.debug)
-    logger.info("Starting ZMQ to CoT converter with log level: %s", "DEBUG" if args.debug else "INFO")
-
     # Retrieve 'tak_host' and 'tak_port' with precedence
     tak_host = args.tak_host if args.tak_host is not None else get_str(config_values.get("tak_host"))
     tak_port = args.tak_port if args.tak_port is not None else get_int(config_values.get("tak_port"), None)
@@ -744,7 +892,16 @@ if __name__ == "__main__":
         "adsb_rate_limit": get_float(config_values.get("adsb_rate_limit", 3.0)),
         "adsb_min_alt": get_int(config_values.get("adsb_min_alt", 0)),
         "adsb_max_alt": get_int(config_values.get("adsb_max_alt", 0)),
+        # FAA RID API fallback (disabled by default; local DB still used)
+        "rid_api_enabled": get_bool(config_values.get("rid_api_enabled"), False),
     }
+
+    # Configure RID API fallback toggle
+    _rid_api_enabled = bool(config.get("rid_api_enabled", False))
+
+    setup_logging(args.debug)
+    logger.info("Starting ZMQ to CoT converter with log level: %s", "DEBUG" if args.debug else "INFO")
+    _start_rid_lookup_worker()
 
     
     # Validate configuration
