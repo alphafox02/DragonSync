@@ -60,7 +60,7 @@ If you install DragonSync elsewhere, ensure the following:
 
 ## FAA RID Enrichment & Logging
 
-- FAA RID lookups are bundled as a submodule (`faa-rid-lookup`). Dragon telemetry is enriched with RID make/model/status/tracking in CoT and MQTT (non-blocking API fallback).
+- FAA RID lookups are bundled as a submodule (`faa-rid-lookup`). Dragon telemetry is enriched with RID make/model/source in CoT and MQTT (non-blocking API fallback).
 - ZMQ logger (`utils/zmq_logger_for_kml.py`) can add RID fields and log to CSV or SQLite; see `utils/README.md` for flags (`--rid-enabled`, `--rid-api`, `--sqlite`, rotation/retention).
 - Offline viewer for SQLite logs: `python utils/log_viewer.py --db drone_log.sqlite --port 5001` (map + filters, offline-safe). Details in `utils/README.md`.
 

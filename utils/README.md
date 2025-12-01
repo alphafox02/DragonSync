@@ -25,7 +25,7 @@ Key flags:
 - `--sqlite <path>` to log to SQLite; `--sqlite-rotate-daily` for per-day files; `--sqlite-retain-days N` to prune old rotated files
 - `--output-csv` still available; you can use both CSV and SQLite together
 
-RID columns emitted: `rid_make`, `rid_model`, `rid_status`, `rid_tracking`, `rid_source`.
+RID columns emitted: `rid_make`, `rid_model`, `rid_source`.
 
 ## Offline viewer
 
@@ -33,4 +33,4 @@ Serve a small map + table UI against the SQLite log (offline-safe canvas map):
 ```bash
 python utils/log_viewer.py --db logs/drone_log.sqlite --port 5001
 ```
-Then open `http://127.0.0.1:5001`. Filters: drone id, RID make/model/status/source, time range, limit. Uses the same RID columns logged above. No external tiles required.
+Then open `http://127.0.0.1:5001`. Filters: drone id, RID make/model/source, time range, limit. Uses the same RID columns logged above. No external tiles required.

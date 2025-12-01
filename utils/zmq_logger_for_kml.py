@@ -287,10 +287,10 @@ def main():
         "vertical_accuracy","horizontal_accuracy","baro_accuracy","speed_accuracy",
         "timestamp_src","timestamp_accuracy","index","runtime","caa","freq",
         # FAA RID enrichment (optional; blanks if not available)
-        "rid_make","rid_model","rid_status","rid_tracking","rid_source"
+        "rid_make","rid_model","rid_source"
     ]
 
-    SQLITE_PLACEHOLDERS = ",".join(["?"] * 40)
+    SQLITE_PLACEHOLDERS = ",".join(["?"] * 38)
     sqlite_insert_sql = f"""
         INSERT INTO logs (
             ts, drone_id, lat, lon, alt, speed, rssi, mac, description, pilot_lat, pilot_lon,
@@ -298,7 +298,7 @@ def main():
             height, height_type, direction, vspeed, ew_dir, speed_multiplier, pressure_altitude,
             vertical_accuracy, horizontal_accuracy, baro_accuracy, speed_accuracy,
             timestamp_src, timestamp_accuracy, idx, runtime, caa, freq,
-            rid_make, rid_model, rid_status, rid_tracking, rid_source
+            rid_make, rid_model, rid_source
         ) VALUES ({SQLITE_PLACEHOLDERS})
     """
     if args.include_system_location:
@@ -386,7 +386,7 @@ def main():
                 vertical_accuracy TEXT, horizontal_accuracy TEXT, baro_accuracy TEXT, speed_accuracy TEXT,
                 timestamp_src TEXT, timestamp_accuracy TEXT, idx INTEGER, runtime REAL,
                 caa TEXT, freq REAL,
-                rid_make TEXT, rid_model TEXT, rid_status TEXT, rid_tracking TEXT, rid_source TEXT
+                rid_make TEXT, rid_model TEXT, rid_source TEXT
             )
         """)
         sqlite_cur.execute("CREATE INDEX IF NOT EXISTS idx_logs_ts ON logs(ts)")
@@ -494,8 +494,7 @@ def main():
                         parsed["timestamp"], parsed["timestamp_accuracy"], parsed["index"], parsed["runtime"],
                         parsed["caa"], parsed["freq"],
                         # FAA RID enrichment (blanks when not present)
-                        rid_info.get("make"), rid_info.get("model"), rid_info.get("status"),
-                        rid_info.get("rid_tracking"), rid_info.get("source")
+                        rid_info.get("make"), rid_info.get("model"), rid_info.get("source")
                     ]
                     csv_row = list(row_base)
                     if args.include_system_location:

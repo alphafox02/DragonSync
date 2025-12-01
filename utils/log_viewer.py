@@ -6,7 +6,7 @@ Usage:
   python utils/log_viewer.py --db path/to/drone_log.sqlite --port 5001
 
 Features:
-  - Filters (time range, drone id, RID make/model/status, RID source)
+- Filters (time range, drone id, RID make/model/source)
   - Limit results (default 500)
   - Map view (canvas-based, offline-safe) + table view
   - Uses the SQLite log produced by utils/zmq_logger_for_kml.py (--sqlite)
@@ -76,7 +76,6 @@ INDEX_HTML = """<!doctype html>
           <label>Drone ID <input id="f-id" placeholder="drone-2146..." /></label>
           <label>RID Make <input id="f-make" placeholder="DJI" /></label>
           <label>RID Model <input id="f-model" placeholder="M30T" /></label>
-          <label>RID Status <input id="f-status" placeholder="accepted/pending" /></label>
           <label>RID Source <input id="f-source" placeholder="local/api" /></label>
           <label>Limit <input id="f-limit" type="number" value="500" min="1" max="5000" /></label>
         </div>
@@ -98,7 +97,7 @@ INDEX_HTML = """<!doctype html>
           <thead>
             <tr>
               <th>Time (UTC)</th><th>Drone</th><th>Lat</th><th>Lon</th><th>Alt</th><th>Speed</th>
-              <th>RID</th><th>Status</th><th>Source</th>
+              <th>RID</th><th>Source</th>
             </tr>
           </thead>
           <tbody id="rows"></tbody>
@@ -114,14 +113,6 @@ INDEX_HTML = """<!doctype html>
     const ctx = canvas.getContext('2d');
     const legendEl = document.getElementById('legend');
     let records = [];
-
-    function statusClass(status) {
-      if (!status) return 'status-other';
-      const s = status.toLowerCase();
-      if (s.includes('accept')) return 'status-accepted';
-      if (s.includes('pend')) return 'status-pending';
-      return 'status-other';
-    }
 
     function fitCanvas() {
       const rect = canvas.parentElement.getBoundingClientRect();
@@ -159,7 +150,7 @@ INDEX_HTML = """<!doctype html>
 
       const pts = records.map(r => {
         const p = mercator(r.lat, r.lon);
-        return {...p, status:r.rid_status, rid: r.rid_make || ''};
+        return {...p, source:r.rid_source, rid: r.rid_make || ''};
       });
       let minX = Math.min(...pts.map(p=>p.x));
       let maxX = Math.max(...pts.map(p=>p.x));
@@ -184,11 +175,11 @@ INDEX_HTML = """<!doctype html>
         ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke();
       }
 
-      function colorFor(status){
-        if(!status) return '#9ca3af';
-        const s=status.toLowerCase();
-        if (s.includes('accept')) return '#10b981';
-        if (s.includes('pend')) return '#f59e0b';
+      function colorFor(source){
+        if(!source) return '#9ca3af';
+        const s=source.toLowerCase();
+        if (s.includes('local')) return '#10b981';
+        if (s.includes('api')) return '#f59e0b';
         return '#93c5fd';
       }
 
@@ -199,12 +190,12 @@ INDEX_HTML = """<!doctype html>
         const x = nx * w;
         const y = h - ny * h;
         ctx.beginPath();
-        ctx.fillStyle = colorFor(p.status);
+        ctx.fillStyle = colorFor(p.source);
         ctx.arc(x,y,4,0,Math.PI*2);
         ctx.fill();
       });
 
-      legendEl.innerHTML = '<div><span class="badge status-accepted">accepted</span> <span class="badge status-pending">pending</span> <span class="badge status-other">other/unknown</span></div>';
+      legendEl.innerHTML = '<div><span class="badge status-accepted">local</span> <span class="badge status-pending">api</span> <span class="badge status-other">other</span></div>';
     }
 
     function renderTable() {
@@ -220,7 +211,6 @@ INDEX_HTML = """<!doctype html>
           <td>${(r.alt ?? 0).toFixed(1)}</td>
           <td>${(r.speed ?? 0).toFixed(1)}</td>
           <td>${(r.rid_make||'') + ' ' + (r.rid_model||'')}</td>
-          <td><span class="badge ${statusClass(r.rid_status)}">${r.rid_status||'n/a'}</span></td>
           <td>${r.rid_source||''}</td>
         `;
         frag.appendChild(tr);
@@ -233,7 +223,7 @@ INDEX_HTML = """<!doctype html>
       const params = new URLSearchParams();
       const limit = document.getElementById('f-limit').value || '500';
       params.set('limit', limit);
-      ['id','make','model','status','source','start','end'].forEach(k=>{
+      ['id','make','model','source','start','end'].forEach(k=>{
         const v = document.getElementById('f-'+k).value.trim();
         if (v) params.set(k, v);
       });
@@ -251,7 +241,7 @@ INDEX_HTML = """<!doctype html>
 
     document.getElementById('btn-apply').addEventListener('click', loadRecords);
     document.getElementById('btn-clear').addEventListener('click', ()=>{
-      ['id','make','model','status','source','start','end'].forEach(k=>document.getElementById('f-'+k).value='');
+      ['id','make','model','source','start','end'].forEach(k=>document.getElementById('f-'+k).value='');
       document.getElementById('f-limit').value='500';
       loadRecords();
     });
@@ -266,7 +256,7 @@ INDEX_HTML = """<!doctype html>
 
 def parse_filters(query):
     filters = {}
-    for key in ["id", "make", "model", "status", "source", "start", "end", "limit"]:
+    for key in ["id", "make", "model", "source", "start", "end", "limit"]:
         if key in query and query[key]:
             filters[key] = query[key][0]
     return filters
@@ -282,7 +272,7 @@ def fetch_records(conn, filters, default_limit=500):
                height, height_type, direction, vspeed, ew_dir, speed_multiplier, pressure_altitude,
                vertical_accuracy, horizontal_accuracy, baro_accuracy, speed_accuracy,
                timestamp_src, timestamp_accuracy, idx, runtime, caa, freq,
-               rid_make, rid_model, rid_status, rid_tracking, rid_source
+               rid_make, rid_model, rid_source
         FROM logs
         WHERE 1=1
     """
@@ -296,9 +286,6 @@ def fetch_records(conn, filters, default_limit=500):
     if "model" in filters:
         sql += " AND rid_model LIKE ?"
         args.append(f"%{filters['model']}%")
-    if "status" in filters:
-        sql += " AND rid_status LIKE ?"
-        args.append(f"%{filters['status']}%")
     if "source" in filters:
         sql += " AND rid_source LIKE ?"
         args.append(f"%{filters['source']}%")

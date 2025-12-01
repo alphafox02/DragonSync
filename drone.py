@@ -339,10 +339,6 @@ class Drone:
             rid_label = f"{self.rid_make or ''} {self.rid_model or ''}".strip()
             if rid_label:
                 remarks += f"; RID: {rid_label}"
-        if self.rid_tracking:
-            remarks += f"; RID Tracking: {self.rid_tracking}"
-        if self.rid_status:
-            remarks += f"; RID Status: {self.rid_status}"
         if self.rid_source:
             remarks += f"; RID Source: {self.rid_source}"
 
@@ -356,10 +352,6 @@ class Drone:
             rid.set('make', self.rid_make)
         if self.rid_model:
             rid.set('model', self.rid_model)
-        if self.rid_tracking:
-            rid.set('tracking', self.rid_tracking)
-        if self.rid_status:
-            rid.set('status', self.rid_status)
         if self.rid_source:
             rid.set('source', self.rid_source)
 
