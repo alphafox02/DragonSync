@@ -165,19 +165,24 @@ class MqttSink:
         self.client.on_connect = _on_connect
         self.client.on_disconnect = _on_disconnect
 
+        # Make reconnects resilient to broker restarts/outages
         try:
-            # Connect first, then start the background network loop
-            self.client.connect(host, int(port), keepalive=keepalive)
+            self.client.reconnect_delay_set(min_delay=2, max_delay=30)
+        except Exception:
+            pass
+
+        try:
+            # Use async connect so startup won't hang if broker is down; loop will keep retrying
+            self.client.connect_async(host, int(port), keepalive=keepalive)
             self.client.loop_start()
 
-            # best-effort wait for connection (if supported)
+            # Best-effort wait for an initial connection without blocking startup
             is_conn = getattr(self.client, "is_connected", None)
-            deadline = time.time() + 3.0
+            deadline = time.time() + 2.0
             while callable(is_conn) and not self.client.is_connected() and time.time() < deadline:
                 time.sleep(0.05)
         except Exception as e:
-            _log.critical("MqttSink failed to connect: %s", e)
-            raise
+            _log.warning("MqttSink initial connect_async failed (will retry via loop): %s", e)
 
     # ────────────────────────────────────────────────
     # Public API used by DroneManager
