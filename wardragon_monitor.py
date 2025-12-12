@@ -71,17 +71,7 @@ def load_gps_ini():
     return None
 
 def get_gps_data(debug=False):
-    """Retrieve GPS data from gpsd or use static values if provided."""
-    if STATIC_GPS['lat'] is not None and STATIC_GPS['lon'] is not None:
-        if debug:
-            print(f"Using static GPS: {STATIC_GPS}")
-        return {
-            'latitude': STATIC_GPS['lat'],
-            'longitude': STATIC_GPS['lon'],
-            'altitude': STATIC_GPS['alt'] if STATIC_GPS['alt'] is not None else 'N/A',
-            'speed': 'N/A',
-            'track': 'N/A'
-        }
+    """Retrieve GPS data from gpsd if available; fall back to static values."""
     try:
         gpsd = gps(mode=WATCH_ENABLE | WATCH_NEWSTYLE)
 
@@ -97,7 +87,10 @@ def get_gps_data(debug=False):
             'longitude': getattr(report, 'lon', 'N/A'),
             'altitude': getattr(report, 'alt', 'N/A'),
             'speed': getattr(report, 'speed', 'N/A'),
-            'track': getattr(report, 'track', 'N/A')
+            'track': getattr(report, 'track', 'N/A'),
+            'gps_fix': getattr(report, 'mode', 1) >= 2,
+            'time_utc': getattr(report, 'time', None),
+            'time_source': 'gpsd',
         }
         if debug:
             print(f"Received GPS data: {gps_info}")
@@ -113,7 +106,29 @@ def get_gps_data(debug=False):
         if debug:
             print(f"Error connecting to gpsd: {e}")
 
-    return {'latitude': 'N/A', 'longitude': 'N/A', 'altitude': 'N/A', 'speed': 'N/A', 'track': 'N/A'}
+    # fall back to static if available
+    if STATIC_GPS['lat'] is not None and STATIC_GPS['lon'] is not None:
+        if debug:
+            print(f"Using static GPS: {STATIC_GPS}")
+        return {
+            'latitude': STATIC_GPS['lat'],
+            'longitude': STATIC_GPS['lon'],
+            'altitude': STATIC_GPS['alt'] if STATIC_GPS['alt'] is not None else 'N/A',
+            'speed': 'N/A',
+            'track': 'N/A',
+            'gps_fix': False,
+            'time_source': 'static'
+        }
+
+    return {
+        'latitude': 'N/A',
+        'longitude': 'N/A',
+        'altitude': 'N/A',
+        'speed': 'N/A',
+        'track': 'N/A',
+        'gps_fix': False,
+        'time_source': 'unknown'
+    }
 
 
 def get_serial_number(debug=False):

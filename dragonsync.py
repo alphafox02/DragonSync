@@ -32,6 +32,10 @@ import os
 
 import zmq
 import json
+
+# Default kit identifier (overridden once wardragon_monitor status arrives)
+KIT_ID_DEFAULT = "wardragon-unknown"
+KIT_ID = KIT_ID_DEFAULT
 try:
     from mqtt_sink import MqttSink
 except Exception:
@@ -334,6 +338,7 @@ def zmq_to_cot(
     adsb_max_alt=0,
 ):
     """Main function to convert ZMQ messages to CoT and send to TAK server."""
+    global KIT_ID
 
     context = zmq.Context()
     telemetry_socket = context.socket(zmq.SUB)
@@ -546,11 +551,14 @@ def zmq_to_cot(
                             baro_accuracy=drone_info.get('baro_accuracy', ""),
                             speed_accuracy=drone_info.get('speed_accuracy', ""),
                             timestamp=drone_info.get('timestamp', ""),
+                            rid_timestamp=drone_info.get('rid_timestamp', ""),
+                            observed_at=time.time(),
                             timestamp_accuracy=drone_info.get('timestamp_accuracy', ""),
                             index=drone_info.get('index', 0),
                             runtime=drone_info.get('runtime', 0),
                             caa_id=drone_info.get('caa', ""),
-                            freq=drone_info.get('freq')
+                            freq=drone_info.get('freq'),
+                            seen_by=KIT_ID
                         )
                         logger.debug(f"Updated drone: {drone_id}")
                     else:
@@ -585,11 +593,14 @@ def zmq_to_cot(
                             baro_accuracy=drone_info.get('baro_accuracy', ""),
                             speed_accuracy=drone_info.get('speed_accuracy', ""),
                             timestamp=drone_info.get('timestamp', ""),
+                            rid_timestamp=drone_info.get('rid_timestamp', ""),
+                            observed_at=time.time(),
                             timestamp_accuracy=drone_info.get('timestamp_accuracy', ""),
                             index=drone_info.get('index', 0),
                             runtime=drone_info.get('runtime', 0),
                             caa_id=drone_info.get('caa', ""),
-                            freq=drone_info.get('freq')
+                            freq=drone_info.get('freq'),
+                            seen_by=KIT_ID
                         )
                         _apply_rid_lookup(drone, serial_number)
                         drone_manager.update_or_add_drone(drone_id, drone)
@@ -630,11 +641,14 @@ def zmq_to_cot(
                                     baro_accuracy=drone_info.get('baro_accuracy', ""),
                                     speed_accuracy=drone_info.get('speed_accuracy', ""),
                                     timestamp=drone_info.get('timestamp', ""),
+                                    rid_timestamp=drone_info.get('rid_timestamp', ""),
+                                    observed_at=time.time(),
                                     timestamp_accuracy=drone_info.get('timestamp_accuracy', ""),
                                     index=drone_info.get('index', 0),
                                     runtime=drone_info.get('runtime', 0),
                                     caa_id=drone_info.get('caa', ""),
-                                    freq=drone_info.get('freq')
+                                    freq=drone_info.get('freq'),
+                                    seen_by=KIT_ID
                                 )
                                 logger.debug(f"Updated existing drone with CAA info for MAC: {drone_info['mac']}")
                                 updated = True
@@ -656,6 +670,11 @@ def zmq_to_cot(
             
                 try:
                     serial_number = status_message.get('serial_number', 'unknown')
+                    # Update kit identifier to align with system CoT identity
+                    if serial_number and serial_number != "unknown":
+                        KIT_ID = f"wardragon-{serial_number}"
+                    else:
+                        KIT_ID = KIT_ID_DEFAULT
                     gps_data = status_message.get('gps_data', {})
                     lat = get_float(gps_data.get('latitude', 0.0))
                     lon = get_float(gps_data.get('longitude', 0.0))

@@ -415,8 +415,11 @@ class MqttSink:
             "height_type": g("height_type", ""),
             "ew_dir": g("ew_dir", ""),
             "timestamp": g("timestamp", ""),
+            "rid_timestamp": g("rid_timestamp", g("timestamp", "")),
+            "observed_at": g("observed_at", None),
             "index": g("index", 0),
             "runtime": g("runtime", 0),
+            "seen_by": g("seen_by", None),
             # radio
             "freq": freq,
             "freq_mhz": freq_mhz,
@@ -575,6 +578,9 @@ class MqttSink:
             alt = _f_or_zero(gps.get("altitude", 0.0))
             speed = _f_or_zero(gps.get("speed", 0.0))
             track = _f_or_zero(gps.get("track", 0.0))
+            gps_fix = bool(gps.get("gps_fix", False))
+            time_source = gps.get("time_source", None)
+            gpsd_time_utc = gps.get("time_utc", None)
 
             cpu = _f_or_zero(sysstats.get("cpu_usage", 0.0))
             mem = sysstats.get("memory", {}) or {}
@@ -607,6 +613,9 @@ class MqttSink:
                 "zynq_temp_c": zynq_temp,
                 "speed_mps": speed,
                 "track_deg": track,
+                "gps_fix": gps_fix,
+                "time_source": time_source,
+                "gpsd_time_utc": gpsd_time_utc,
                 "updated": int(time.time()),
             }
             self.client.publish(f"{self._sys_base}/attrs", json.dumps(attrs), qos=self.qos, retain=False)

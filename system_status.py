@@ -43,7 +43,10 @@ class SystemStatus:
         pluto_temp: str = 'N/A',
         zynq_temp: str = 'N/A',
         speed: float = 0.0,
-        track: float = 0.0
+        track: float = 0.0,
+        gps_fix: bool = False,
+        time_source: str = "",
+        gpsd_time_utc: str = "",
     ):
         self.id = f"wardragon-{serial_number}"
         self.lat = lat
@@ -62,6 +65,9 @@ class SystemStatus:
         # external GPS-provided fields
         self.speed = speed
         self.track = track
+        self.gps_fix = gps_fix
+        self.time_source = time_source
+        self.gpsd_time_utc = gpsd_time_utc
         
     def to_cot_xml(self) -> bytes:
         """Converts the system status data to a CoT XML message, embedding provided speed & track."""
@@ -102,6 +108,12 @@ class SystemStatus:
             f"Pluto Temp: {self.pluto_temp}°C, "
             f"Zynq Temp: {self.zynq_temp}°C"
         )
+        if self.time_source:
+            remarks_text += f"; TimeSource: {self.time_source}"
+        if self.gps_fix:
+            remarks_text += "; GPS Fix: true"
+        if self.gpsd_time_utc:
+            remarks_text += f"; GPSD UTC: {self.gpsd_time_utc}"
         etree.SubElement(detail, 'remarks').text = xml.sax.saxutils.escape(remarks_text)
         etree.SubElement(detail, 'color', argb='-256')
 

@@ -108,6 +108,8 @@ def parse_drone_info(message: Any, ua_type_mapping: Dict[int, str]) -> Optional[
                 drone_info['horizontal_accuracy'] = loc.get('horizontal_accuracy', "")
                 drone_info['baro_accuracy']       = loc.get('baro_accuracy', "")
                 drone_info['speed_accuracy']      = loc.get('speed_accuracy', "")
+                # RID-provided timestamp (often relative/seconds past hour); keep original key for legacy
+                drone_info['rid_timestamp']       = loc.get('timestamp', "")
                 drone_info['timestamp']           = loc.get('timestamp', "")
                 drone_info['timestamp_accuracy']  = loc.get('timestamp_accuracy', "")
 
@@ -172,6 +174,7 @@ def parse_drone_info(message: Any, ua_type_mapping: Dict[int, str]) -> Optional[
             drone_info['horizontal_accuracy'] = loc.get('horizontal_accuracy', "")
             drone_info['baro_accuracy']       = loc.get('baro_accuracy', "")
             drone_info['speed_accuracy']      = loc.get('speed_accuracy', "")
+            drone_info['rid_timestamp']       = loc.get('timestamp', "")
             drone_info['timestamp']           = loc.get('timestamp', "")
             drone_info['timestamp_accuracy']  = loc.get('timestamp_accuracy', "")
 

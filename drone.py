@@ -80,11 +80,14 @@ class Drone:
         baro_accuracy: str = "",
         speed_accuracy: str = "",
         timestamp: str = "",
+        rid_timestamp: str = "",
+        observed_at: Optional[float] = None,
         timestamp_accuracy: str = "",
         index: int = 0,
         runtime: int = 0,
         caa_id: str = "",
         freq: Optional[float] = None,
+        seen_by: Optional[str] = None,
     ):
         self.id = id
         self.id_type = id_type
@@ -105,7 +108,10 @@ class Drone:
         self.baro_accuracy = baro_accuracy
         self.speed_accuracy = speed_accuracy
         self.timestamp = timestamp
+        self.rid_timestamp = rid_timestamp or timestamp
+        self.observed_at = observed_at
         self.timestamp_accuracy = timestamp_accuracy
+        self.seen_by: Optional[str] = seen_by
 
         # store previous position for fallback bearing calculation
         self.prev_lat: Optional[float] = None
@@ -176,11 +182,14 @@ class Drone:
         baro_accuracy: str = "",
         speed_accuracy: str = "",
         timestamp: str = "",
+        rid_timestamp: str = "",
+        observed_at: Optional[float] = None,
         timestamp_accuracy: str = "",
         index: int = 0,
         runtime: int = 0,
         caa_id: str = "",
         freq: Optional[float] = None,
+        seen_by: Optional[str] = None,
     ):
         """Updates the drone's telemetry data, computes fallback bearing if needed."""
         # remember previous location
@@ -236,6 +245,10 @@ class Drone:
             self.speed_accuracy = speed_accuracy
         if timestamp:
             self.timestamp = timestamp
+        if rid_timestamp:
+            self.rid_timestamp = rid_timestamp
+        if observed_at is not None:
+            self.observed_at = observed_at
         if timestamp_accuracy:
             self.timestamp_accuracy = timestamp_accuracy
 
@@ -243,6 +256,9 @@ class Drone:
             self.caa_id = caa_id
         if freq is not None:
             self.freq = freq
+
+        if seen_by is not None:
+            self.seen_by = seen_by
 
         self.last_update_time = time.time()
 
@@ -341,6 +357,13 @@ class Drone:
                 remarks += f"; RID: {rid_label}"
         if self.rid_source:
             remarks += f"; RID Source: {self.rid_source}"
+        if self.seen_by:
+            remarks += f"; SeenBy: {self.seen_by}"
+        if self.observed_at:
+            obs_dt = datetime.datetime.utcfromtimestamp(self.observed_at)
+            remarks += f"; ObservedAt: {obs_dt.isoformat()}Z"
+        if self.rid_timestamp:
+            remarks += f"; RID_TS: {self.rid_timestamp}"
 
         etree.SubElement(detail, 'remarks').text = xml.sax.saxutils.escape(remarks)
         etree.SubElement(detail, 'color', argb='-256')
@@ -409,9 +432,13 @@ class Drone:
             'usericon',
             iconsetpath='com.atakmap.android.maps.public/Civilian/Person.png'
         )
-        etree.SubElement(detail, 'remarks').text = xml.sax.saxutils.escape(
-            f"Pilot location for drone {self.id}"
-        )
+        pilot_remarks = f"Pilot location for drone {self.id}"
+        if self.seen_by:
+            pilot_remarks += f"; SeenBy: {self.seen_by}"
+        if self.observed_at:
+            obs_dt = datetime.datetime.utcfromtimestamp(self.observed_at)
+            pilot_remarks += f"; ObservedAt: {obs_dt.isoformat()}Z"
+        etree.SubElement(detail, 'remarks').text = xml.sax.saxutils.escape(pilot_remarks)
 
         xml_bytes = etree.tostring(event, pretty_print=True,
                                    xml_declaration=True, encoding='UTF-8')
@@ -467,9 +494,13 @@ class Drone:
             'usericon',
             iconsetpath='com.atakmap.android.maps.public/Civilian/House.png'
         )
-        etree.SubElement(detail, 'remarks').text = xml.sax.saxutils.escape(
-            f"Home location for drone {self.id}"
-        )
+        home_remarks = f"Home location for drone {self.id}"
+        if self.seen_by:
+            home_remarks += f"; SeenBy: {self.seen_by}"
+        if self.observed_at:
+            obs_dt = datetime.datetime.utcfromtimestamp(self.observed_at)
+            home_remarks += f"; ObservedAt: {obs_dt.isoformat()}Z"
+        etree.SubElement(detail, 'remarks').text = xml.sax.saxutils.escape(home_remarks)
 
         xml_bytes = etree.tostring(event, pretty_print=True,
                                    xml_declaration=True, encoding='UTF-8')
