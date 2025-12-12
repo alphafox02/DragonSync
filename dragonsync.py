@@ -19,7 +19,6 @@ import sys
 import ssl
 import socket
 import signal
-import logging
 import argparse
 import datetime
 import time
@@ -50,16 +49,23 @@ from messaging import CotMessenger
 from utils import load_config, validate_config, get_str, get_int, get_float, get_bool
 from telemetry_parser import parse_drone_info
 from aircraft import adsb_worker_loop
+import logging
+logger = logging.getLogger(__name__)
 
-# FAA RID lookup module (bundled as git submodule)
+# FAA RID lookup module (optional git submodule)
+lookup_serial = None
+_FAA_LOOKUP_AVAILABLE = False
+
 try:
     FAA_LOOKUP_PATH = Path(__file__).parent / "faa-rid-lookup"
     if FAA_LOOKUP_PATH.exists():
-        sys.path.append(str(FAA_LOOKUP_PATH))
-    from drone_serial_lookup import lookup_serial
-    _FAA_LOOKUP_AVAILABLE = True
+        sys.path.insert(0, str(FAA_LOOKUP_PATH))
+        from drone_serial_lookup import lookup_serial
+        _FAA_LOOKUP_AVAILABLE = True
+    else:
+        logger.info("FAA RID lookup submodule not present; continuing without RID enrichment.")
 except Exception as e:
-    lookup_serial = None  # type: ignore
+    lookup_serial = None
     _FAA_LOOKUP_AVAILABLE = False
     logger.warning("FAA RID lookup module unavailable: %s", e)
 
