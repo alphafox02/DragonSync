@@ -165,19 +165,24 @@ class MqttSink:
         self.client.on_connect = _on_connect
         self.client.on_disconnect = _on_disconnect
 
+        # Make reconnects resilient to broker restarts/outages
         try:
-            # Connect first, then start the background network loop
-            self.client.connect(host, int(port), keepalive=keepalive)
+            self.client.reconnect_delay_set(min_delay=2, max_delay=30)
+        except Exception:
+            pass
+
+        try:
+            # Use async connect so startup won't hang if broker is down; loop will keep retrying
+            self.client.connect_async(host, int(port), keepalive=keepalive)
             self.client.loop_start()
 
-            # best-effort wait for connection (if supported)
+            # Best-effort wait for an initial connection without blocking startup
             is_conn = getattr(self.client, "is_connected", None)
-            deadline = time.time() + 3.0
+            deadline = time.time() + 2.0
             while callable(is_conn) and not self.client.is_connected() and time.time() < deadline:
                 time.sleep(0.05)
         except Exception as e:
-            _log.critical("MqttSink failed to connect: %s", e)
-            raise
+            _log.warning("MqttSink initial connect_async failed (will retry via loop): %s", e)
 
     # ────────────────────────────────────────────────
     # Public API used by DroneManager
@@ -415,8 +420,11 @@ class MqttSink:
             "height_type": g("height_type", ""),
             "ew_dir": g("ew_dir", ""),
             "timestamp": g("timestamp", ""),
+            "rid_timestamp": g("rid_timestamp", g("timestamp", "")),
+            "observed_at": g("observed_at", None),
             "index": g("index", 0),
             "runtime": g("runtime", 0),
+            "seen_by": g("seen_by", None),
             # radio
             "freq": freq,
             "freq_mhz": freq_mhz,
@@ -575,6 +583,9 @@ class MqttSink:
             alt = _f_or_zero(gps.get("altitude", 0.0))
             speed = _f_or_zero(gps.get("speed", 0.0))
             track = _f_or_zero(gps.get("track", 0.0))
+            gps_fix = bool(gps.get("gps_fix", False))
+            time_source = gps.get("time_source", None)
+            gpsd_time_utc = gps.get("time_utc", None)
 
             cpu = _f_or_zero(sysstats.get("cpu_usage", 0.0))
             mem = sysstats.get("memory", {}) or {}
@@ -607,6 +618,9 @@ class MqttSink:
                 "zynq_temp_c": zynq_temp,
                 "speed_mps": speed,
                 "track_deg": track,
+                "gps_fix": gps_fix,
+                "time_source": time_source,
+                "gpsd_time_utc": gpsd_time_utc,
                 "updated": int(time.time()),
             }
             self.client.publish(f"{self._sys_base}/attrs", json.dumps(attrs), qos=self.qos, retain=False)
