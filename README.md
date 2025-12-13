@@ -89,13 +89,13 @@ MQTT startup uses async connect and automatic retries. If the broker is down at 
 ## How it Works (on WarDragon)
 
 ```
-Sniffers (WiFi RID / BLE RID / DJI) -> ZMQ 4224 ->\
-                                                  \
-                                                   > DragonSync -> CoT: multicast or TAK server
-                                                  /               \-> MQTT (Home Assistant)
-WarDragon Monitor (GPS) -> ZMQ 4225 --------------/                \-> Lattice (optional)
+Sniffers (WiFi RID / BLE RID / DJI) --> ZMQ 4224
+WarDragon Monitor (GPS/system)      --> ZMQ 4225
+ADS-B / UAT via readsb (optional)   --> HTTP /?all_with_pos
 
-ADS-B / UAT via readsb (optional) -> HTTP API (/?all_with_pos) ----/
+ZMQ 4224 + ZMQ 4225 + (HTTP) --> DragonSync --> CoT (multicast/TAK)
+                                              \-> MQTT (aggregate + per-drone)
+                                              \-> Lattice (optional)
 ```
 
 - **ZMQ 4224**: stream of decoded Remote ID / DJI frames.
