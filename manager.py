@@ -17,7 +17,7 @@ limitations under the License.
 
 import time
 from collections import deque
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple
 import logging
 import math
 
@@ -46,8 +46,21 @@ class DroneManager:
         cot_messenger: Optional[CotMessenger] = None,
         extra_sinks: Optional[List] = None,
     ):
-        self.drones: deque[str] = deque(maxlen=max_drones)
+        # Opportunistic slots are the classic limit; trusted drones have a separate pool.
+        self.max_opportunistic = max_drones
+        self.max_trusted = max_drones  # allow trusted to double the total without evicting opportunistic slots
+
+        self.drones: deque[str] = deque()  # manual eviction, no fixed maxlen
         self.drone_dict: Dict[str, Drone] = {}
+        self.trusted_ids: set[str] = set()
+
+        # MAC spam guard: track distinct IDs per MAC over a short window
+        self.mac_id_window: Dict[str, List[tuple[float, str]]] = {}
+        self.mac_window_seconds = 30.0
+        self.max_ids_per_mac_window = 5
+        self.mac_backoff_seconds = 60.0
+        self.mac_blocked_until: Dict[str, float] = {}
+
         self.rate_limit = rate_limit
         self.inactivity_timeout = inactivity_timeout
         self.cot_messenger = cot_messenger
@@ -55,18 +68,15 @@ class DroneManager:
 
     def update_or_add_drone(self, drone_id: str, drone_data: Drone):
         """Updates an existing drone or adds a new one to the collection."""
+        now = time.time()
+
         if drone_id not in self.drone_dict:
-            if len(self.drones) >= self.drones.maxlen:
-                oldest_drone_id = self.drones.popleft()
-                self.drone_dict.pop(oldest_drone_id, None)
-                logger.debug(f"Removed oldest drone: {oldest_drone_id}")
-            self.drones.append(drone_id)
-            self.drone_dict[drone_id] = drone_data
-            drone_data.last_sent_time = 0.0
-            logger.debug(f"Added new drone: {drone_id}: {drone_data}")
+            if not self._admit_new_drone(drone_id, drone_data, now):
+                return
         else:
-            # Same as before, but now also track freq
-            self.drone_dict[drone_id].update(
+            # Same as before, but now also track freq and trust promotion
+            existing = self.drone_dict[drone_id]
+            existing.update(
                 lat=drone_data.lat,
                 lon=drone_data.lon,
                 speed=drone_data.speed,
@@ -80,6 +90,11 @@ class DroneManager:
                 rssi=drone_data.rssi,
                 freq=getattr(drone_data, "freq", None),
             )
+
+            # If RID lookup succeeds later, promote to trusted pool
+            if getattr(existing, "rid_lookup_success", False):
+                self.trusted_ids.add(drone_id)
+
             logger.debug(f"Updated drone: {drone_id}: {drone_data}")
 
     def send_updates(self):
@@ -159,6 +174,7 @@ class DroneManager:
             except ValueError:
                 pass
             self.drone_dict.pop(drone_id, None)
+            self.trusted_ids.discard(drone_id)
             logger.debug("Removed drone: %s", drone_id)
 
 
@@ -170,3 +186,85 @@ class DroneManager:
                     s.close()
             except Exception as e:
                 logger.warning("Error shutting down sink %s: %s", s, e)
+
+    # ───────────────────────────── internal helpers ────────────────────────────
+
+    def _is_trusted(self, d: Drone) -> bool:
+        """Trusted when RID lookup succeeded (make/model resolved)."""
+        return bool(getattr(d, "rid_lookup_success", False))
+
+    def _admit_new_drone(self, drone_id: str, drone_data: Drone, now: float) -> bool:
+        """Admission control with MAC/ID consistency and trusted reserve."""
+        mac = getattr(drone_data, "mac", "") or ""
+        trusted = self._is_trusted(drone_data)
+
+        # MAC spam guard
+        if mac:
+            blocked_until = self.mac_blocked_until.get(mac, 0.0)
+            if now < blocked_until:
+                logger.debug("Rejecting %s from MAC %s (backoff active)", drone_id, mac)
+                return False
+
+            # prune old entries
+            entries = self.mac_id_window.get(mac, [])
+            entries = [(t, i) for (t, i) in entries if now - t <= self.mac_window_seconds]
+            entries.append((now, drone_id))
+            self.mac_id_window[mac] = entries
+            unique_ids = {i for _, i in entries}
+            if len(unique_ids) > self.max_ids_per_mac_window:
+                self.mac_blocked_until[mac] = now + self.mac_backoff_seconds
+                logger.warning("MAC %s presented %d unique IDs in %.0fs; backoff applied",
+                               mac, len(unique_ids), self.mac_window_seconds)
+                return False
+
+        # Figure out pool sizes
+        current_trusted = len(self.trusted_ids)
+        current_opportunistic = len(self.drone_dict) - current_trusted
+
+        if trusted:
+            # If trusted pool is full, evict oldest trusted to make room
+            if current_trusted >= self.max_trusted:
+                evicted = self._evict_oldest(trusted_only=True)
+                if not evicted:
+                    logger.debug("No trusted slot available for %s; dropping", drone_id)
+                    return False
+        else:
+            # Opportunistic pool enforcement
+            if current_opportunistic >= self.max_opportunistic:
+                evicted = self._evict_oldest(trusted_only=False)
+                if not evicted:
+                    logger.debug("No opportunistic slot available for %s; dropping", drone_id)
+                    return False
+
+        # Admit
+        self.drones.append(drone_id)
+        self.drone_dict[drone_id] = drone_data
+        drone_data.last_sent_time = 0.0
+        if trusted:
+            self.trusted_ids.add(drone_id)
+        logger.debug("Added new %s drone: %s", "trusted" if trusted else "opportunistic", drone_id)
+        return True
+
+    def _evict_oldest(self, trusted_only: bool) -> bool:
+        """Evict the oldest drone matching trust filter. Returns True if evicted."""
+        for _ in range(len(self.drones)):
+            candidate_id = self.drones.popleft()
+            is_trusted = candidate_id in self.trusted_ids
+            if trusted_only and not is_trusted:
+                # keep in order, append back
+                self.drones.append(candidate_id)
+                continue
+            if not trusted_only and is_trusted:
+                self.drones.append(candidate_id)
+                continue
+
+            # Evict this candidate
+            self.drone_dict.pop(candidate_id, None)
+            if is_trusted:
+                self.trusted_ids.discard(candidate_id)
+            logger.debug("Evicted oldest %s drone: %s",
+                         "trusted" if is_trusted else "opportunistic", candidate_id)
+            return True
+
+        # nothing evicted
+        return False
