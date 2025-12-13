@@ -1,6 +1,6 @@
-# DragonSync (WarDragon Edition)
+# DragonSync (Community Edition)
 
-A lightweight gateway that turns WarDragon’s drone detections into **Cursor on Target (CoT)** for TAK/ATAK, and (optionally) publishes per‑drone telemetry to **Lattice** as well as to **MQTT** for **Home Assistant**. This README focuses on the **WarDragon** kit where everything (drivers, sniffers, ZMQ monitor) is already set up—so you mostly just configure and run **DragonSync**.
+A lightweight gateway that turns WarDragon’s drone detections into **Cursor on Target (CoT)** for TAK/ATAK, and (optionally) publishes per‑drone telemetry to **Lattice** as well as to **MQTT** for **Home Assistant**. This README focuses on the **WarDragon** kit where everything (drivers, sniffers, ZMQ monitor) is already set up—so you mostly just configure and run **DragonSync (Community Edition)**.
 
 DragonSync can also ingest **ADS‑B / UAT (978 MHz)** aircraft data from a local `readsb` instance and convert that into CoT alongside your drone detections.
 
@@ -55,6 +55,28 @@ If you install DragonSync elsewhere, ensure the following:
 - Optional: enable MQTT + Home Assistant and/or Lattice export.
 - Optional: enable ADS‑B / 978 via a local `readsb` instance.
 - When a drone times out, DragonSync marks it **offline** in HA, preserving last‑known position in history.
+
+---
+
+## New data fields and attribution
+
+- Per‑drone MQTT payloads now include:
+  - `observed_at`: kit system time (seconds since epoch) when the packet was processed.
+  - `rid_timestamp`: the airframe’s own timestamp from the RID message (may be relative/non‑UTC on some sources).
+  - `seen_by`: kit identifier (e.g., `wardragon-<serial>` from wardragon_monitor’s `serial_number`).
+  - Legacy `timestamp` remains for compatibility.
+- System MQTT attrs (`wardragon/system/attrs`) include GPS status:
+  - `gps_fix` (bool), `time_source` (e.g., `gpsd`, `static`, `unknown`), `gpsd_time_utc` when available.
+- Home Assistant discovery: pilot/home trackers are only created when HA discovery is enabled. Without HA, only drone payloads (aggregate/per‑drone) and system attrs are published.
+
+## MQTT resilience
+
+MQTT startup uses async connect and automatic retries. If the broker is down at boot, DragonSync still runs (CoT etc.) and will connect once the broker comes up.
+
+## Quick testing
+
+- Run wardragon_monitor plus the simulator (`tests/test_drone_generator.py`) to see `seen_by` flip to `wardragon-<serial>` after the first status message.
+- Check `wardragon/system/attrs` for `gps_fix`/`time_source`. Without HA, pilot/home MQTT trackers are not created; data is still present in drone payloads.
 
 ---
 
