@@ -53,6 +53,7 @@ from messaging import CotMessenger
 from utils import load_config, validate_config, get_str, get_int, get_float, get_bool
 from telemetry_parser import parse_drone_info
 from aircraft import adsb_worker_loop
+from kismet_ingest import start_kismet_worker
 import logging
 logger = logging.getLogger(__name__)
 
@@ -414,6 +415,22 @@ def zmq_to_cot(
     else:
         logger.info("ADS-B ingestion disabled or adsb_json_url not set; skipping ADS-B worker.")
 
+    # ---- Optional Kismet ingest (Wi-Fi / Bluetooth) ----
+    kismet_thread = None
+    kismet_stop = None
+    if config.get("kismet_enabled"):
+        try:
+            kismet_thread, kismet_stop = start_kismet_worker(
+                host=config.get("kismet_host", "http://127.0.0.1:2501"),
+                apikey=config.get("kismet_apikey") or None,
+                cot_messenger=cot_messenger,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to start Kismet ingest: {e}")
+            kismet_thread, kismet_stop = None, None
+    else:
+        logger.info("Kismet ingestion disabled; set kismet_enabled=true to enable.")
+
     # ---- Build sinks list (Lattice + MQTT) ----
     extra_sinks = []
 
@@ -456,6 +473,13 @@ def zmq_to_cot(
         try:
             if _rid_lookup_queue is not None:
                 _rid_lookup_queue.put_nowait(None)
+        except Exception:
+            pass
+        try:
+            if kismet_stop:
+                kismet_stop.set()
+                if kismet_thread and kismet_thread.is_alive():
+                    kismet_thread.join(timeout=2.0)
         except Exception:
             pass
         try:
@@ -884,6 +908,11 @@ if __name__ == "__main__":
         "mqtt_ha_enabled": args.mqtt_ha_enabled if hasattr(args, "mqtt_ha_enabled") and args.mqtt_ha_enabled is not None else get_bool(config_values.get("mqtt_ha_enabled", False)),
         "mqtt_ha_prefix": args.mqtt_ha_prefix if hasattr(args, "mqtt_ha_prefix") and args.mqtt_ha_prefix is not None else get_str(config_values.get("mqtt_ha_prefix", "homeassistant")),
         "mqtt_ha_device_base": args.mqtt_ha_device_base if hasattr(args, "mqtt_ha_device_base") and args.mqtt_ha_device_base is not None else get_str(config_values.get("mqtt_ha_device_base", "wardragon_drone")),
+
+        # ---- Kismet (optional) config ----
+        "kismet_enabled": get_bool(config_values.get("kismet_enabled"), False),
+        "kismet_host": get_str(config_values.get("kismet_host", "http://127.0.0.1:2501")),
+        "kismet_apikey": get_str(config_values.get("kismet_apikey")),
 
         # ---- Lattice (optional) config block ----
         "lattice_enabled": args.lattice_enabled or get_bool(config_values.get("lattice_enabled"), False),
