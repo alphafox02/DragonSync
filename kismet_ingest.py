@@ -238,7 +238,7 @@ def start_kismet_worker(
     logged_sample = False
 
     def worker():
-        nonlocal allowed_phys
+        nonlocal allowed_phys, logged_sample
         last_ts = 0
         devices = None
         while not stop_event.is_set():
