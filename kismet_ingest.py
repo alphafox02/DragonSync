@@ -54,21 +54,67 @@ def _pick(dicts, *keys):
 def _extract_location(dev: Dict[str, Any]) -> Optional[Tuple[float, float, float]]:
     """Try to pull lat/lon/alt from common Kismet location fields."""
     loc = dev.get("kismet.common.location") or {}
+
+    def _from_point(point, alt=None, swap=False):
+        """Convert a Kismet geopoint (lon, lat[, alt]) to lat/lon/alt."""
+        if not isinstance(point, (list, tuple)) or len(point) < 2:
+            return None
+        try:
+            lon = float(point[0])
+            lat = float(point[1])
+            if swap:
+                lat, lon = lon, lat
+            alt_val = alt if alt is not None else (float(point[2]) if len(point) >= 3 else 0.0)
+            return float(lat), float(lon), float(alt_val)
+        except Exception:
+            return None
+
+    def _parse_candidate(val):
+        """Handle the variety of location shapes Kismet emits."""
+        if isinstance(val, dict):
+            if "kismet.common.location.geopoint" in val:
+                return _from_point(val.get("kismet.common.location.geopoint"), val.get("kismet.common.location.alt"))
+            for key in (
+                "kismet.common.location.last_loc",
+                "kismet.common.location.avg_loc",
+                "kismet.common.location.last",
+                "kismet.common.location.avg_loc",
+                "kismet.common.location.min_loc",
+                "kismet.common.location.max_loc",
+            ):
+                if key in val:
+                    res = _parse_candidate(val.get(key))
+                    if res:
+                        return res
+            return None
+        if isinstance(val, (list, tuple)) and len(val) >= 2:
+            return _from_point(val)
+        return None
+
     candidates = [
+        loc,
         loc.get("kismet.common.location.last_loc"),
         loc.get("kismet.common.location.avg_loc"),
         dev.get("kismet.common.location.last_loc"),
         dev.get("kismet.common.location.avg_loc"),
+        dev.get("kismet.common.location.last"),
+        dev.get("kismet.common.location.avg_loc"),
     ]
+
+    # Dot11 devices sometimes stash location under the last beaconed SSID record
+    last_beacon = dev.get("dot11.device.last_beaconed_ssid_record") or {}
+    candidates.append(last_beacon.get("dot11.advertisedssid.location"))
+    # Or in the advertised_ssid_map list
+    advertised_list = dev.get("dot11.device.advertised_ssid_map")
+    if isinstance(advertised_list, list):
+        for ssid in advertised_list:
+            if isinstance(ssid, dict) and ssid.get("dot11.advertisedssid.location"):
+                candidates.append(ssid.get("dot11.advertisedssid.location"))
+
     for c in candidates:
-        if isinstance(c, (list, tuple)) and len(c) >= 2:
-            try:
-                lat = float(c[0])
-                lon = float(c[1])
-                alt = float(c[2]) if len(c) >= 3 else 0.0
-                return lat, lon, alt
-            except Exception:
-                continue
+        res = _parse_candidate(c)
+        if res:
+            return res
     return None
 
 
@@ -82,6 +128,12 @@ def _normalize_device(dev: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     mac = _pick(dicts, "macaddr", "kismet.device.base.macaddr")
     phy = _pick(dicts, "phyname", "kismet.device.base.phyname")
+    if not phy:
+        # Fallback based on device family
+        if dev.get("dot11.device") is not None:
+            phy = "IEEE802.11"
+        elif dev.get("bluetooth.device") is not None:
+            phy = "BLUETOOTH"
     name = _pick(dicts, "name", "commonname", "kismet.device.base.name", "kismet.device.base.commonname")
     manuf = _pick(dicts, "manuf", "kismet.device.base.manuf")
     last_time = _pick(dicts, "last_time", "kismet.device.base.last_time") or 0
@@ -183,12 +235,14 @@ def start_kismet_worker(
     stop_event = threading.Event()
     allowed_phys = phys or DEFAULT_PHYS
     last_sent: Dict[str, float] = {}
+    logged_sample = False
 
     def worker():
         nonlocal allowed_phys
         last_ts = 0
         devices = None
         while not stop_event.is_set():
+            polled = sent = skipped_no_loc = skipped_phy = 0
             try:
                 if devices is None:
                     devices = kismet_rest.Devices(host_uri=host, apikey=apikey)
@@ -203,10 +257,20 @@ def start_kismet_worker(
                 for dev in devices.all(ts=last_ts):
                     if stop_event.is_set():
                         break
+                    polled += 1
                     norm = _normalize_device(dev)
                     if not norm:
+                        skipped_no_loc += 1
+                        if not logged_sample:
+                            logger.debug(
+                                "Kismet skip: no location; keys=%s",
+                                list(dev.keys()),
+                            )
                         continue
                     if norm["phy"] not in allowed_phys:
+                        skipped_phy += 1
+                        if not logged_sample:
+                            logger.debug("Kismet skip: phy %s not in %s", norm["phy"], allowed_phys)
                         continue
                     last_ts = max(last_ts, norm.get("last_time", last_ts))
                     uid = norm["uid"]
@@ -217,8 +281,22 @@ def start_kismet_worker(
                     cot = _device_to_cot(norm)
                     cot_messenger.send_cot(cot)
                     last_sent[uid] = now
+                    sent += 1
+                    if not logged_sample:
+                        logger.debug("Kismet send sample: uid=%s phy=%s mac=%s lat=%s lon=%s", uid, norm.get("phy"), norm.get("mac"), norm.get("lat"), norm.get("lon"))
+                        logged_sample = True
             except Exception as e:
                 logger.warning("Kismet ingest error: %s; sleeping %.1fs", e, poll_interval)
+            finally:
+                if polled or sent or skipped_no_loc or skipped_phy:
+                    logger.debug(
+                        "Kismet poll stats: polled=%d sent=%d skipped_no_loc=%d skipped_phy=%d allowed_phys=%s",
+                        polled,
+                        sent,
+                        skipped_no_loc,
+                        skipped_phy,
+                        allowed_phys,
+                    )
             time.sleep(poll_interval)
 
     thread = threading.Thread(target=worker, name="kismet-worker", daemon=True)
