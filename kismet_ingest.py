@@ -54,6 +54,7 @@ def _pick(dicts, *keys):
 def _extract_location(dev: Dict[str, Any]) -> Optional[Tuple[float, float, float]]:
     """Try to pull lat/lon/alt from common Kismet location fields."""
     loc = dev.get("kismet.common.location") or {}
+    base = dev.get("kismet.device.base", {}) or {}
 
     def _from_point(point, alt=None, swap=False):
         """Convert a Kismet geopoint (lon, lat[, alt]) to lat/lon/alt."""
@@ -99,6 +100,10 @@ def _extract_location(dev: Dict[str, Any]) -> Optional[Tuple[float, float, float
         dev.get("kismet.common.location.avg_loc"),
         dev.get("kismet.common.location.last"),
         dev.get("kismet.common.location.avg_loc"),
+        base.get("kismet.common.location"),
+        base.get("kismet.common.location.last_loc"),
+        base.get("kismet.common.location.avg_loc"),
+        base.get("kismet.common.location.last"),
     ]
 
     # Dot11 devices sometimes stash location under the last beaconed SSID record
