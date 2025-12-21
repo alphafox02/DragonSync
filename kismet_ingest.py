@@ -100,6 +100,8 @@ def _extract_location(dev: Dict[str, Any]) -> Optional[Tuple[float, float, float
         dev.get("kismet.common.location.avg_loc"),
         dev.get("kismet.common.location.last"),
         dev.get("kismet.common.location.avg_loc"),
+        dev.get("kismet.device.base.location"),
+        base.get("kismet.device.base.location"),
         base.get("kismet.common.location"),
         base.get("kismet.common.location.last_loc"),
         base.get("kismet.common.location.avg_loc"),
