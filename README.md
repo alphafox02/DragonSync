@@ -6,6 +6,30 @@ DragonSync can also ingest **ADS‑B / UAT (978 MHz)** aircraft data from a loca
 
 ---
 
+## Table of Contents
+
+- [Features](#features)
+- [Requirements](#requirements)
+- [TL;DR](#tldr)
+- [New data fields and attribution](#new-data-fields-and-attribution)
+- [MQTT resilience](#mqtt-resilience)
+- [Quick testing](#quick-testing)
+- [FAA RID Enrichment & Logging](#faa-rid-enrichment--logging)
+- [How it Works (on WarDragon)](#how-it-works-on-wardragon)
+- [Quick Start (WarDragon)](#quick-start-wardragon)
+- [HTTP API (Read-Only)](#http-api-read-only)
+- [ADS-B / 978 Integration (Experimental)](#ads-b--978-integration-experimental)
+- [`config.ini` (WarDragon-tuned example)](#configini-wardragon-tuned-example)
+- [Kismet Ingest (Optional)](#kismet-ingest-optional)
+- [Home Assistant (MQTT)](#home-assistant-mqtt)
+- [Static GPS (if no live GPS)](#static-gps-if-no-live-gps)
+- [TAK / ATAK Output](#tak--atak-output)
+- [Lattice (optional)](#lattice-optional)
+- [Tips & Troubleshooting](#tips--troubleshooting)
+- [License](#license)
+
+---
+
 ## Features  
 
 - **Remote ID Drone Detection:**  
