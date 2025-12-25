@@ -383,6 +383,60 @@ class Drone:
         logger.debug("CoT XML for drone '%s':\n%s", self.id, xml_bytes.decode('utf-8'))
         return xml_bytes
 
+    def to_dict(self) -> dict:
+        """Return a JSON-safe representation for API export."""
+        return {
+            "id": self.id,
+            "id_type": self.id_type,
+            "ua_type": self.ua_type,
+            "ua_type_name": self.ua_type_name,
+            "operator_id_type": self.operator_id_type,
+            "operator_id": self.operator_id,
+            "op_status": self.op_status,
+            "height_type": self.height_type,
+            "ew_dir": self.ew_dir,
+            "direction": self.direction,
+            "speed_multiplier": self.speed_multiplier,
+            "pressure_altitude": self.pressure_altitude,
+            "vertical_accuracy": self.vertical_accuracy,
+            "horizontal_accuracy": self.horizontal_accuracy,
+            "baro_accuracy": self.baro_accuracy,
+            "speed_accuracy": self.speed_accuracy,
+            "timestamp": self.timestamp,
+            "rid_timestamp": self.rid_timestamp,
+            "observed_at": self.observed_at,
+            "timestamp_accuracy": self.timestamp_accuracy,
+            "seen_by": self.seen_by,
+            "lat": self.lat,
+            "lon": self.lon,
+            "alt": self.alt,
+            "height": self.height,
+            "speed": self.speed,
+            "vspeed": self.vspeed,
+            "pilot_lat": self.pilot_lat,
+            "pilot_lon": self.pilot_lon,
+            "home_lat": self.home_lat,
+            "home_lon": self.home_lon,
+            "description": self.description,
+            "mac": self.mac,
+            "rssi": self.rssi,
+            "index": self.index,
+            "runtime": self.runtime,
+            "caa_id": self.caa_id,
+            "freq": self._fmt_freq_mhz(self.freq),
+            "rid": {
+                "tracking": self.rid_tracking,
+                "status": self.rid_status,
+                "make": self.rid_make,
+                "model": self.rid_model,
+                "source": self.rid_source,
+                "lookup_attempted": self.rid_lookup_attempted,
+                "lookup_success": self.rid_lookup_success,
+            },
+            "last_update_time": self.last_update_time,
+            "track_type": "drone",
+        }
+
     def to_pilot_cot_xml(self, stale_offset: Optional[float] = None) -> bytes:
         """Generates a CoT XML message for the pilot location.
 

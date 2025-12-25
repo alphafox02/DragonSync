@@ -195,6 +195,47 @@ class ADSBTracker:
         )
         return xml_bytes
 
+    def craft_to_dict(self, craft: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Build a JSON-safe aircraft dict for API export."""
+        lat = craft.get("lat")
+        lon = craft.get("lon")
+        if lat is None or lon is None:
+            return None
+        uid = self.make_uid(craft)
+        if not uid:
+            return None
+        alt = craft.get("alt_geom")
+        if alt is None:
+            alt = craft.get("alt_baro", 0)
+        gs = float(craft.get("gs") or 0.0)
+        track = float(craft.get("track") or 0.0)
+        callsign = (craft.get("flight") or craft.get("hex") or uid).strip()
+        squawk = craft.get("squawk")
+        reg = craft.get("reg") or craft.get("r")
+        category = craft.get("category") or craft.get("cat")
+        on_ground = bool(craft.get("onground") or craft.get("OnGround") or False)
+        nac_p = craft.get("NACp", craft.get("nac_p"))
+        nac_v = craft.get("NACv", craft.get("nac_v", nac_p))
+        return {
+            "id": uid,
+            "track_type": "aircraft",
+            "callsign": callsign,
+            "hex": (craft.get("hex") or "").upper(),
+            "lat": lat,
+            "lon": lon,
+            "alt": alt,
+            "ground_speed": gs,
+            "track": track,
+            "squawk": squawk,
+            "reg": reg,
+            "category": category,
+            "on_ground": on_ground,
+            "nac_p": nac_p,
+            "nac_v": nac_v,
+            "last_update_time": time.time(),
+            "source": "adsb",
+        }
+
 
 def _load_aircraft(json_url: str) -> List[Dict[str, Any]]:
     """
@@ -226,6 +267,7 @@ def adsb_worker_loop(
     max_alt: int = 0,
     poll_interval: float = 1.0,
     stop_event=None,
+    aircraft_cache: Optional[dict] = None,
 ):
     """
     Background worker:
@@ -287,13 +329,19 @@ def adsb_worker_loop(
                 continue
 
             cot = tracker.craft_to_cot(craft)
-            if not cot:
-                continue
-
-            try:
-                cot_messenger.send_cot(cot)
-            except Exception as e:
-                logger.exception(f"ADS-B: failed to send CoT for {uid}: {e}")
+            if cot:
+                try:
+                    cot_messenger.send_cot(cot)
+                except Exception as e:
+                    logger.exception(f"ADS-B: failed to send CoT for {uid}: {e}")
+            # optional API cache
+            if aircraft_cache is not None:
+                try:
+                    dto = tracker.craft_to_dict(craft)
+                    if dto:
+                        aircraft_cache[dto["id"]] = dto
+                except Exception:
+                    pass
 
         time.sleep(poll_interval)
 

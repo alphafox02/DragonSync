@@ -48,8 +48,10 @@ from tak_client import TAKClient
 from tak_udp_client import TAKUDPClient
 from drone import Drone
 from system_status import SystemStatus
+from api_server import serve_api
 from manager import DroneManager
 from messaging import CotMessenger
+from update_check import update_check
 from utils import load_config, validate_config, get_str, get_int, get_float, get_bool
 from telemetry_parser import parse_drone_info
 from aircraft import adsb_worker_loop
@@ -340,6 +342,8 @@ def zmq_to_cot(
     """Main function to convert ZMQ messages to CoT and send to TAK server."""
     global KIT_ID
 
+    system_status_latest = None
+
     context = zmq.Context()
     telemetry_socket = context.socket(zmq.SUB)
     telemetry_socket.connect(f"tcp://{zmq_host}:{zmq_port}")
@@ -405,6 +409,7 @@ def zmq_to_cot(
                     max_alt=adsb_max_alt,
                     poll_interval=1.0,
                     stop_event=adsb_stop,
+                    aircraft_cache=drone_manager.aircraft,
                 ),
                 daemon=True,
             )
@@ -433,6 +438,32 @@ def zmq_to_cot(
         extra_sinks=extra_sinks,
     )
 
+    # Start API server (read-only) to expose status and tracks
+    api_server = None
+    api_thread = None
+    try:
+        if config.get("api_enabled", True):
+            env_host = os.environ.get("DRAGONSYNC_API_HOST")
+            env_port = os.environ.get("DRAGONSYNC_API_PORT")
+            api_host = env_host if env_host is not None else config.get("api_host", "0.0.0.0")
+            api_port = int(env_port) if env_port is not None else int(config.get("api_port", 8088))
+            api_server = serve_api(
+                manager=drone_manager,
+                system_status_provider=lambda: system_status_latest,
+                kit_id_provider=lambda: KIT_ID,
+                config_provider=_sanitized_config,
+                update_check_provider=update_check,
+                host=api_host,
+                port=api_port,
+            )
+            api_thread = threading.Thread(target=api_server.serve_forever, name="api-server", daemon=True)
+            api_thread.start()
+            logger.info("Started DragonSync API server thread.")
+        else:
+            logger.info("DragonSync API disabled via config.")
+    except Exception as e:
+        logger.warning("API server failed to start: %s", e)
+
     def signal_handler(sig, frame):
         """Handles signal interruptions for graceful shutdown."""
         logger.info("Interrupted by user")
@@ -452,6 +483,11 @@ def zmq_to_cot(
                 drone_manager.close()
             except Exception:
                 pass
+        try:
+            if api_server:
+                api_server.shutdown()
+        except Exception:
+            pass
         # Stop RID lookup worker
         try:
             if _rid_lookup_queue is not None:
@@ -709,6 +745,7 @@ def zmq_to_cot(
                         temperature=temperature, uptime=uptime,
                         pluto_temp=pluto_temp, zynq_temp=zynq_temp
                     )
+                    system_status_latest = system_status
                     cot_xml = system_status.to_cot_xml()
                 except Exception as e:
                     logger.exception(f"Status handling failed: {e}")
@@ -858,6 +895,9 @@ if __name__ == "__main__":
         "tak_tls_p12": args.tak_tls_p12 if args.tak_tls_p12 is not None else get_str(config_values.get("tak_tls_p12")),
         "tak_tls_p12_pass": args.tak_tls_p12_pass if args.tak_tls_p12_pass is not None else get_str(config_values.get("tak_tls_p12_pass")),
         "tak_tls_skip_verify": args.tak_tls_skip_verify if args.tak_tls_skip_verify else get_bool(config_values.get("tak_tls_skip_verify"), False),
+        "api_enabled": get_bool(config_values.get("api_enabled"), True),
+        "api_host": get_str(config_values.get("api_host", "0.0.0.0")),
+        "api_port": get_int(config_values.get("api_port", 8088)),
         "tak_multicast_addr": args.tak_multicast_addr if args.tak_multicast_addr is not None else get_str(config_values.get("tak_multicast_addr")),
         "tak_multicast_port": args.tak_multicast_port if args.tak_multicast_port is not None else get_int(config_values.get("tak_multicast_port"), None),
         "enable_multicast": args.enable_multicast or get_bool(config_values.get("enable_multicast"), False),
@@ -935,6 +975,63 @@ if __name__ == "__main__":
     except ValueError as ve:
         logger.critical(f"Configuration Error: {ve}")
         sys.exit(1)
+
+    # Sanitize config for API exposure (redact secrets)
+    def _sanitized_config():
+        cfg = {}
+        try:
+            cfg["tak"] = {
+                "host": config.get("tak_host"),
+                "port": config.get("tak_port"),
+                "protocol": config.get("tak_protocol"),
+                "multicast_addr": config.get("tak_multicast_addr"),
+                "multicast_port": config.get("tak_multicast_port"),
+                "enable_multicast": bool(config.get("enable_multicast")),
+                "enable_receive": bool(config.get("enable_receive")),
+                "multicast_interface": config.get("tak_multicast_interface"),
+                "multicast_ttl": config.get("multicast_ttl"),
+                "tls": bool(config.get("tak_tls_p12")),
+            }
+            cfg["api"] = {
+                "enabled": bool(config.get("api_enabled", True)),
+                "host": config.get("api_host"),
+                "port": config.get("api_port"),
+            }
+            cfg["zmq"] = {
+                "host": config.get("zmq_host"),
+                "port": config.get("zmq_port"),
+                "status_port": config.get("zmq_status_port"),
+            }
+            cfg["mqtt"] = {
+                "enabled": bool(config.get("mqtt_enabled")),
+                "host": config.get("mqtt_host"),
+                "port": config.get("mqtt_port"),
+                "topic": config.get("mqtt_topic"),
+                "per_drone_enabled": bool(config.get("mqtt_per_drone_enabled")),
+                "per_drone_base": config.get("mqtt_per_drone_base"),
+                "ha_enabled": bool(config.get("mqtt_ha_enabled")),
+                "ha_prefix": config.get("mqtt_ha_prefix"),
+            }
+            cfg["adsb"] = {
+                "enabled": bool(config.get("adsb_enabled")),
+                "json_url": config.get("adsb_json_url"),
+                "uid_prefix": config.get("adsb_uid_prefix"),
+                "cot_stale": config.get("adsb_cot_stale"),
+                "rate_limit": config.get("adsb_rate_limit"),
+                "min_alt": config.get("adsb_min_alt"),
+                "max_alt": config.get("adsb_max_alt"),
+            }
+            cfg["lattice"] = {
+                "enabled": bool(config.get("lattice_enabled")),
+                "base_url": config.get("lattice_base_url") or config.get("lattice_endpoint"),
+                "source_name": config.get("lattice_source_name"),
+                "drone_rate": config.get("lattice_drone_rate"),
+                "wardragon_rate": config.get("lattice_wd_rate"),
+            }
+        except Exception:
+            pass
+        return cfg
+
 
     # Setup TLS context only if tak_protocol is set (which implies tak_host and tak_port are provided)
     tak_tls_context = setup_tls_context(

@@ -48,6 +48,8 @@ class DroneManager:
     ):
         self.drones: deque[str] = deque(maxlen=max_drones)
         self.drone_dict: Dict[str, Drone] = {}
+        # Optional ADS-B cache (uid -> dict). Populated externally if desired.
+        self.aircraft: Dict[str, dict] = {}
         self.rate_limit = rate_limit
         self.inactivity_timeout = inactivity_timeout
         self.cot_messenger = cot_messenger
@@ -170,3 +172,27 @@ class DroneManager:
                     s.close()
             except Exception as e:
                 logger.warning("Error shutting down sink %s: %s", s, e)
+
+    def export_tracks(self):
+        """
+        Export a list of track dictionaries (drones + any aircraft) for API consumption.
+        Adds a track_type field to disambiguate.
+        """
+        tracks = []
+        try:
+            for d in list(self.drone_dict.values()):
+                obj = d.to_dict()
+                obj["track_type"] = "drone"
+                tracks.append(obj)
+        except Exception as e:
+            logger.debug("Failed exporting drones for API: %s", e)
+        # Aircraft export hook (if aircraft data is integrated into this manager)
+        if hasattr(self, "aircraft") and isinstance(self.aircraft, dict):
+            try:
+                for a in list(self.aircraft.values()):
+                    obj = dict(a)
+                    obj["track_type"] = "aircraft"
+                    tracks.append(obj)
+            except Exception as e:
+                logger.debug("Failed exporting aircraft for API: %s", e)
+        return tracks

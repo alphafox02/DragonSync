@@ -68,6 +68,29 @@ class SystemStatus:
         self.gps_fix = gps_fix
         self.time_source = time_source
         self.gpsd_time_utc = gpsd_time_utc
+
+    def to_dict(self):
+        return {
+            "uid": self.id,
+            "lat": self.lat,
+            "lon": self.lon,
+            "alt": self.alt,
+            "cpu_usage": self.cpu_usage,
+            "memory_total": self.memory_total,
+            "memory_available": self.memory_available,
+            "disk_total": self.disk_total,
+            "disk_used": self.disk_used,
+            "temperature": self.temperature,
+            "uptime": self.uptime,
+            "pluto_temp": self.pluto_temp,
+            "zynq_temp": self.zynq_temp,
+            "speed": self.speed,
+            "track": self.track,
+            "gps_fix": self.gps_fix,
+            "time_source": self.time_source,
+            "gpsd_time_utc": self.gpsd_time_utc,
+            "last_update_time": self.last_update_time,
+        }
         
     def to_cot_xml(self) -> bytes:
         """Converts the system status data to a CoT XML message, embedding provided speed & track."""
