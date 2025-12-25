@@ -1,6 +1,6 @@
 # DragonSync (Community Edition)
 
-A lightweight gateway that turns WarDragon’s drone detections into **Cursor on Target (CoT)** for TAK/ATAK, and (optionally) publishes per‑drone telemetry to **Lattice** as well as to **MQTT** for **Home Assistant**. This README focuses on the **WarDragon** kit where everything (drivers, sniffers, ZMQ monitor) is already set up—so you mostly just configure and run **DragonSync (Community Edition)**.
+A lightweight gateway that turns WarDragon’s drone detections into **Cursor on Target (CoT)** for TAK/ATAK, and (optionally) publishes per‑drone telemetry to **Lattice** as well as to **MQTT** for **Home Assistant**. This README focuses on the **WarDragon** kit where everything (drivers, sniffers, ZMQ monitor) is already set up—so you mostly just configure and run **DragonSync (Community Edition)**. A companion ATAK plugin (**WarDragon**) can use the read‑only API for richer UI, but it does **not** replace DragonSync’s CoT output.
 
 DragonSync can also ingest **ADS‑B / UAT (978 MHz)** aircraft data from a local `readsb` instance and convert that into CoT alongside your drone detections.
 
@@ -22,6 +22,8 @@ DragonSync can also ingest **ADS‑B / UAT (978 MHz)** aircraft data from a loca
    Uses ZMQ for communication between components.  
 - **TAK/ATAK Integration:**  
    Supports multicast for ATAK or direct TAK server connections.  
+- **Read‑only HTTP API (optional):**  
+   Exposes status, tracks, and sanitized config for the WarDragon ATAK companion app.  
 
 ---
 
@@ -54,6 +56,7 @@ If you install DragonSync elsewhere, ensure the following:
 - You only need to edit **`config.ini`** in the DragonSync repo, then run `dragonsync.py`.
 - Optional: enable MQTT + Home Assistant and/or Lattice export.
 - Optional: enable ADS‑B / 978 via a local `readsb` instance.
+- Optional: enable the **read‑only API** for the WarDragon ATAK companion app.
 - When a drone times out, DragonSync marks it **offline** in HA, preserving last‑known position in history.
 
 ---
@@ -96,6 +99,7 @@ ADS-B / UAT via readsb (optional)   --> HTTP /?all_with_pos
 ZMQ 4224 + ZMQ 4225 + (HTTP) --> DragonSync --> CoT (multicast/TAK)
                                               \-> MQTT (aggregate + per-drone)
                                               \-> Lattice (optional)
+                                              \-> HTTP API (WarDragon ATAK companion)
 ```
 
 - **ZMQ 4224**: stream of decoded Remote ID / DJI frames.
@@ -105,6 +109,7 @@ ZMQ 4224 + ZMQ 4225 + (HTTP) --> DragonSync --> CoT (multicast/TAK)
   - **CoT** to ATAK/WinTAK via **multicast** _or_ **TAK server** (TCP/UDP, optional TLS).
   - **MQTT** (per‑drone JSON + HA discovery) for dashboards and a live map in Home Assistant.
   - **Lattice** export for Anduril Lattice, if configured.
+  - **HTTP API** (read‑only) for the WarDragon ATAK companion plugin.
 
 ---
 
@@ -132,6 +137,29 @@ journalctl -u dragonsync.service -f   # tail logs
 ```
 
 > The WarDragon kit already includes sniffers and the ZMQ monitor; you do **not** need to run those manually unless you customized the setup.
+
+---
+
+## HTTP API (Read‑Only)
+
+The API is intended for the **WarDragon ATAK companion plugin** and exposes data that ATAK alone doesn’t show well (health, detailed track metadata, config view).
+
+**Endpoints**
+
+- `GET /status` — system health + kit ID
+- `GET /drones` — drone + aircraft tracks (when enabled)
+- `GET /config` — sanitized config
+- `GET /update/check` — git update check (read‑only)
+
+**Config**
+
+```ini
+api_enabled = true
+api_host = 0.0.0.0
+api_port = 8088
+```
+
+> This API does **not** replace CoT; ATAK still receives CoT via multicast/TAK server.
 
 ---
 
@@ -273,6 +301,36 @@ adsb_json_url = http://127.0.0.1:8080/?all_with_pos
 adsb_min_alt = 0
 adsb_max_alt = 0
 ```
+
+---
+
+## Kismet Ingest (Optional)
+
+DragonSync can optionally ingest **Wi‑Fi / Bluetooth** device locations from Kismet and emit CoT. This is **off by default** and **allow‑list only**.
+
+**Requirements**
+
+- Kismet running with REST API enabled (default: `http://127.0.0.1:2501`)
+- Python package: `python-kismet-rest`
+
+**Enable**
+
+```ini
+kismet_enabled = true
+kismet_host = http://127.0.0.1:2501
+kismet_apikey =
+```
+
+**Allow‑list (required)**
+
+Create or edit `kismet_targets.txt` (repo root). One MAC per line:
+
+```
+# Example
+AA:BB:CC:DD:EE:FF
+```
+
+If the file is missing or empty, **no Kismet CoT is sent**. This prevents ATAK from being flooded with unrelated devices.
 
 **Notes**
 - For ATAK on the same LAN/VPN, multicast is easiest (`enable_multicast=true`). In ATAK, add a Network feed for the same group/port.

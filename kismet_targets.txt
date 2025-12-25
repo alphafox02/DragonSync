@@ -1,0 +1,5 @@
+# Kismet target allowlist (one MAC per line)
+# Lines starting with # are comments.
+#
+# Example:
+# AA:BB:CC:DD:EE:FF
