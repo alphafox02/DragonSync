@@ -294,6 +294,12 @@ def start_kismet_worker(
                 logged_empty_targets = False
                 if targets:
                     logger.info("Kismet targets loaded: %d MACs", len(targets))
+            if not targets:
+                if not logged_empty_targets:
+                    logger.warning("Kismet targets empty or missing; no CoT will be sent.")
+                    logged_empty_targets = True
+                time.sleep(poll_interval)
+                continue
             try:
                 if devices is None:
                     devices = kismet_rest.Devices(host_uri=host, apikey=apikey)
@@ -323,17 +329,11 @@ def start_kismet_worker(
                         if not logged_sample:
                             logger.debug("Kismet skip: phy %s not in %s", norm["phy"], allowed_phys)
                         continue
-                    if not targets:
-                        skipped_target += 1
-                        if not logged_empty_targets:
-                            logger.warning("Kismet targets empty or missing; no CoT will be sent.")
-                            logged_empty_targets = True
-                        continue
+                    last_ts = max(last_ts, norm.get("last_time", last_ts))
                     mac_norm = _normalize_mac(norm.get("mac"))
                     if not mac_norm or mac_norm not in targets:
                         skipped_target += 1
                         continue
-                    last_ts = max(last_ts, norm.get("last_time", last_ts))
                     uid = norm["uid"]
                     now = time.time()
                     last = last_sent.get(uid, 0.0)

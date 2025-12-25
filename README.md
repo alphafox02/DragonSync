@@ -312,6 +312,7 @@ DragonSync can optionally ingest **Wi‑Fi / Bluetooth** device locations from K
 
 - Kismet running with REST API enabled (default: `http://127.0.0.1:2501`)
 - Python package: `python-kismet-rest`
+- Kismet API tokens: use a **readonly** key for queries, or **admin** for datasource control. Keys are created in the Kismet web UI. Set the token in `kismet_apikey`.
 
 **Enable**
 
