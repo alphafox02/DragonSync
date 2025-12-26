@@ -55,7 +55,7 @@ class ADSBTracker:
             return True
         return False
 
-    def craft_to_cot(self, craft: Dict[str, Any]) -> Optional[bytes]:
+    def craft_to_cot(self, craft: Dict[str, Any], seen_by: Optional[str] = None) -> Optional[bytes]:
         """
         Map a single aircraft from readsb / dump1090-style JSON into a CoT event.
 
@@ -183,6 +183,8 @@ class ADSBTracker:
 
         # You can flip this to "src=readsb" if you want to be explicit
         remark_parts.append("src=adsb")
+        if seen_by:
+            remark_parts.append(f"SeenBy: {seen_by}")
 
         remarks = " ".join(p for p in remark_parts if p)
         etree.SubElement(detail, "remarks").text = xml.sax.saxutils.escape(remarks)
@@ -195,7 +197,11 @@ class ADSBTracker:
         )
         return xml_bytes
 
-    def craft_to_dict(self, craft: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def craft_to_dict(
+        self,
+        craft: Dict[str, Any],
+        seen_by: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
         """Build a JSON-safe aircraft dict for API export."""
         lat = craft.get("lat")
         lon = craft.get("lon")
@@ -234,6 +240,7 @@ class ADSBTracker:
             "nac_v": nac_v,
             "last_update_time": time.time(),
             "source": "adsb",
+            "seen_by": seen_by,
         }
 
 
@@ -268,6 +275,7 @@ def adsb_worker_loop(
     poll_interval: float = 1.0,
     stop_event=None,
     aircraft_cache: Optional[dict] = None,
+    seen_by: Optional[str] = None,
 ):
     """
     Background worker:
@@ -328,7 +336,7 @@ def adsb_worker_loop(
             if not uid or not tracker.should_send(uid):
                 continue
 
-            cot = tracker.craft_to_cot(craft)
+            cot = tracker.craft_to_cot(craft, seen_by=seen_by)
             if cot:
                 try:
                     cot_messenger.send_cot(cot)
@@ -337,7 +345,7 @@ def adsb_worker_loop(
             # optional API cache
             if aircraft_cache is not None:
                 try:
-                    dto = tracker.craft_to_dict(craft)
+                    dto = tracker.craft_to_dict(craft, seen_by=seen_by)
                     if dto:
                         aircraft_cache[dto["id"]] = dto
                 except Exception:

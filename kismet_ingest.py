@@ -206,7 +206,11 @@ def _normalize_device(dev: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     }
 
 
-def _device_to_cot(d: Dict[str, Any], stale_s: float = 120.0) -> bytes:
+def _device_to_cot(
+    d: Dict[str, Any],
+    stale_s: float = 120.0,
+    seen_by: Optional[str] = None,
+) -> bytes:
     """Build a minimal CoT event for a Kismet device."""
     now = datetime.datetime.utcnow()
     t = now.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
@@ -222,6 +226,8 @@ def _device_to_cot(d: Dict[str, Any], stale_s: float = 120.0) -> bytes:
         f"manuf={d.get('manuf')}" if d.get("manuf") else None,
         "src=kismet",
     ]
+    if seen_by:
+        remarks_parts.append(f"SeenBy: {seen_by}")
     remarks = " ".join(p for p in remarks_parts if p)
 
     event = ET.Element(
@@ -254,6 +260,7 @@ def start_kismet_worker(
     host: str,
     apikey: Optional[str],
     cot_messenger: Any,
+    seen_by: Optional[str] = None,
     phys: Optional[set] = None,
     target_file: Optional[Path] = None,
     poll_interval: float = 5.0,
@@ -339,7 +346,7 @@ def start_kismet_worker(
                     last = last_sent.get(uid, 0.0)
                     if now - last < min_send_interval:
                         continue
-                    cot = _device_to_cot(norm)
+                    cot = _device_to_cot(norm, seen_by=seen_by)
                     cot_messenger.send_cot(cot)
                     last_sent[uid] = now
                     sent += 1

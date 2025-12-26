@@ -411,6 +411,7 @@ def zmq_to_cot(
                     poll_interval=1.0,
                     stop_event=adsb_stop,
                     aircraft_cache=drone_manager.aircraft,
+                    seen_by=KIT_ID,
                 ),
                 daemon=True,
             )
@@ -429,6 +430,7 @@ def zmq_to_cot(
                 host=config.get("kismet_host", "http://127.0.0.1:2501"),
                 apikey=config.get("kismet_apikey") or None,
                 cot_messenger=cot_messenger,
+                seen_by=KIT_ID,
             )
         except Exception as e:
             logger.warning(f"Failed to start Kismet ingest: {e}")
