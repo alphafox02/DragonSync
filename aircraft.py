@@ -78,8 +78,9 @@ class ADSBTracker:
             alt = craft.get("alt_baro", 0)
 
         # Identity-ish stuff
-        callsign = (craft.get("flight") or craft.get("hex") or uid).strip()
-        hex_id = (craft.get("hex") or "").upper()
+        flight = (craft.get("flight") or "").strip()
+        hex_id = (craft.get("hex") or "").strip().upper()
+        callsign = uid
         squawk = craft.get("squawk")
         # readsb can add reg if using db-file / db-file-lt, but it's optional
         reg = craft.get("reg") or craft.get("r")
@@ -162,11 +163,12 @@ class ADSBTracker:
         if on_ground:
             track_el.set("slope", "0")
 
+        display_id = flight or hex_id
         # Build richer remarks but keep it compact
         remark_parts = [
             "ADS-B",
             f"hex={hex_id}" if hex_id else None,
-            f"cs={callsign}" if callsign else None,
+            f"flight={display_id}" if display_id else None,
             f"alt={alt}ft",
             f"gs={gs}kt",
             f"track={track}",
@@ -215,7 +217,8 @@ class ADSBTracker:
             alt = craft.get("alt_baro", 0)
         gs = float(craft.get("gs") or 0.0)
         track = float(craft.get("track") or 0.0)
-        callsign = (craft.get("flight") or craft.get("hex") or uid).strip()
+        flight = (craft.get("flight") or "").strip()
+        callsign = uid
         squawk = craft.get("squawk")
         reg = craft.get("reg") or craft.get("r")
         category = craft.get("category") or craft.get("cat")
@@ -235,6 +238,7 @@ class ADSBTracker:
             "squawk": squawk,
             "reg": reg,
             "category": category,
+            "flight": flight or None,
             "on_ground": on_ground,
             "nac_p": nac_p,
             "nac_v": nac_v,
