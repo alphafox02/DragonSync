@@ -390,37 +390,6 @@ def zmq_to_cot(
     # Start receiver if enabled
     cot_messenger.start_receiver()
 
-    # ---- Optional ADS-B worker (dump1090 aircraft.json) ----
-    adsb_stop = threading.Event()
-    adsb_thread = None
-
-    if adsb_enabled and adsb_json_url:
-        try:
-            logger.info(f"ADS-B enabled; starting worker for {adsb_json_url}")
-            adsb_thread = threading.Thread(
-                target=adsb_worker_loop,
-                name="adsb-worker",
-                kwargs=dict(
-                    json_url=adsb_json_url,
-                    cot_messenger=cot_messenger,
-                    uid_prefix=adsb_uid_prefix,
-                    rate_limit=adsb_rate_limit,
-                    stale=adsb_cot_stale,
-                    min_alt=adsb_min_alt,
-                    max_alt=adsb_max_alt,
-                    poll_interval=1.0,
-                    stop_event=adsb_stop,
-                    aircraft_cache=drone_manager.aircraft,
-                    seen_by=KIT_ID,
-                ),
-                daemon=True,
-            )
-            adsb_thread.start()
-        except Exception as e:
-            logger.exception(f"Failed to start ADS-B worker: {e}")
-    else:
-        logger.info("ADS-B ingestion disabled or adsb_json_url not set; skipping ADS-B worker.")
-
     # ---- Optional Kismet ingest (Wi-Fi / Bluetooth) ----
     kismet_thread = None
     kismet_stop = None
@@ -456,6 +425,37 @@ def zmq_to_cot(
         cot_messenger=cot_messenger,
         extra_sinks=extra_sinks,
     )
+
+    # ---- Optional ADS-B worker (dump1090 aircraft.json) ----
+    adsb_stop = threading.Event()
+    adsb_thread = None
+
+    if adsb_enabled and adsb_json_url:
+        try:
+            logger.info(f"ADS-B enabled; starting worker for {adsb_json_url}")
+            adsb_thread = threading.Thread(
+                target=adsb_worker_loop,
+                name="adsb-worker",
+                kwargs=dict(
+                    json_url=adsb_json_url,
+                    cot_messenger=cot_messenger,
+                    uid_prefix=adsb_uid_prefix,
+                    rate_limit=adsb_rate_limit,
+                    stale=adsb_cot_stale,
+                    min_alt=adsb_min_alt,
+                    max_alt=adsb_max_alt,
+                    poll_interval=1.0,
+                    stop_event=adsb_stop,
+                    aircraft_cache=drone_manager.aircraft,
+                    seen_by=KIT_ID,
+                ),
+                daemon=True,
+            )
+            adsb_thread.start()
+        except Exception as e:
+            logger.exception(f"Failed to start ADS-B worker: {e}")
+    else:
+        logger.info("ADS-B ingestion disabled or adsb_json_url not set; skipping ADS-B worker.")
 
     # Start API server (read-only) to expose status and tracks
     api_server = None
