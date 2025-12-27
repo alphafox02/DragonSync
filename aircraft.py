@@ -20,7 +20,7 @@ import json
 import logging
 import datetime
 import xml.sax.saxutils
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Callable, Union
 from urllib.request import urlopen, URLError
 
 from lxml import etree
@@ -275,7 +275,7 @@ def adsb_worker_loop(
     poll_interval: float = 1.0,
     stop_event=None,
     aircraft_cache: Optional[dict] = None,
-    seen_by: Optional[str] = None,
+    seen_by: Optional[Union[str, Callable[[], Optional[str]]]] = None,
 ):
     """
     Background worker:
@@ -320,6 +320,14 @@ def adsb_worker_loop(
             time.sleep(poll_interval)
             continue
 
+        if callable(seen_by):
+            try:
+                current_seen_by = seen_by()
+            except Exception:
+                current_seen_by = None
+        else:
+            current_seen_by = seen_by
+
         for craft in aircraft_list:
             lat = craft.get("lat")
             lon = craft.get("lon")
@@ -336,7 +344,7 @@ def adsb_worker_loop(
             if not uid or not tracker.should_send(uid):
                 continue
 
-            cot = tracker.craft_to_cot(craft, seen_by=seen_by)
+            cot = tracker.craft_to_cot(craft, seen_by=current_seen_by)
             if cot:
                 try:
                     cot_messenger.send_cot(cot)
@@ -345,7 +353,7 @@ def adsb_worker_loop(
             # optional API cache
             if aircraft_cache is not None:
                 try:
-                    dto = tracker.craft_to_dict(craft, seen_by=seen_by)
+                    dto = tracker.craft_to_dict(craft, seen_by=current_seen_by)
                     if dto:
                         aircraft_cache[dto["id"]] = dto
                 except Exception:

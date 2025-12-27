@@ -447,7 +447,7 @@ def zmq_to_cot(
                     poll_interval=1.0,
                     stop_event=adsb_stop,
                     aircraft_cache=drone_manager.aircraft,
-                    seen_by=KIT_ID,
+                    seen_by=lambda: KIT_ID,
                 ),
                 daemon=True,
             )
