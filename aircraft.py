@@ -276,6 +276,7 @@ def adsb_worker_loop(
     stop_event=None,
     aircraft_cache: Optional[dict] = None,
     seen_by: Optional[Union[str, Callable[[], Optional[str]]]] = None,
+    cache_ttl: Optional[float] = 120.0,
 ):
     """
     Background worker:
@@ -358,6 +359,16 @@ def adsb_worker_loop(
                         aircraft_cache[dto["id"]] = dto
                 except Exception:
                     pass
+
+        if aircraft_cache is not None and cache_ttl is not None and cache_ttl > 0:
+            now = time.time()
+            for key, dto in list(aircraft_cache.items()):
+                try:
+                    last = dto.get("last_update_time")
+                    if last is None or (now - float(last)) > cache_ttl:
+                        aircraft_cache.pop(key, None)
+                except Exception:
+                    aircraft_cache.pop(key, None)
 
         time.sleep(poll_interval)
 
