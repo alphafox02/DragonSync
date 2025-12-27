@@ -333,6 +333,8 @@ def adsb_worker_loop(
         else:
             current_seen_by = seen_by
 
+        has_seen_by = bool(current_seen_by) and str(current_seen_by).lower() != "wardragon-unknown"
+
         for craft in aircraft_list:
             lat = craft.get("lat")
             lon = craft.get("lon")
@@ -349,16 +351,17 @@ def adsb_worker_loop(
             if not uid or not tracker.should_send(uid):
                 continue
 
-            cot = tracker.craft_to_cot(craft, seen_by=current_seen_by)
-            if cot:
-                try:
-                    cot_messenger.send_cot(cot)
-                except Exception as e:
-                    logger.exception(f"ADS-B: failed to send CoT for {uid}: {e}")
+            if has_seen_by:
+                cot = tracker.craft_to_cot(craft, seen_by=current_seen_by)
+                if cot:
+                    try:
+                        cot_messenger.send_cot(cot)
+                    except Exception as e:
+                        logger.exception(f"ADS-B: failed to send CoT for {uid}: {e}")
             # optional API cache
             if aircraft_cache is not None:
                 try:
-                    dto = tracker.craft_to_dict(craft, seen_by=current_seen_by)
+                    dto = tracker.craft_to_dict(craft, seen_by=current_seen_by if has_seen_by else None)
                     if dto:
                         aircraft_cache[dto["id"]] = dto
                 except Exception:
