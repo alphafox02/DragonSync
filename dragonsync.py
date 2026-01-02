@@ -334,14 +334,6 @@ def zmq_to_cot(
     enable_receive: bool = False,
     lattice_sink: Optional[object] = None,
     mqtt_sink: Optional[object] = None,
-    adsb_enabled=False,
-    adsb_json_url=None,
-    adsb_uid_prefix="adsb-",
-    adsb_cot_stale=15.0,
-    adsb_rate_limit=3.0,
-    adsb_min_alt=0,
-    adsb_max_alt=0,
-    adsb_cache_ttl=120.0,
 ):
     """Main function to convert ZMQ messages to CoT and send to TAK server."""
     global KIT_ID
@@ -432,6 +424,15 @@ def zmq_to_cot(
     # ---- Optional ADS-B worker (dump1090 aircraft.json) ----
     adsb_stop = threading.Event()
     adsb_thread = None
+
+    adsb_enabled = config.get("adsb_enabled", False)
+    adsb_json_url = config.get("adsb_json_url")
+    adsb_uid_prefix = config.get("adsb_uid_prefix", "adsb-")
+    adsb_cot_stale = config.get("adsb_cot_stale", 15.0)
+    adsb_rate_limit = config.get("adsb_rate_limit", 3.0)
+    adsb_min_alt = config.get("adsb_min_alt", 0)
+    adsb_max_alt = config.get("adsb_max_alt", 0)
+    adsb_cache_ttl = config.get("adsb_cache_ttl", 120.0)
 
     if adsb_enabled and adsb_json_url:
         try:
@@ -1223,12 +1224,4 @@ if __name__ == "__main__":
         enable_receive=config["enable_receive"],
         lattice_sink=lattice_sink,
         mqtt_sink=mqtt_sink,
-        adsb_enabled=config["adsb_enabled"],
-        adsb_json_url=config["adsb_json_url"],
-        adsb_uid_prefix=config["adsb_uid_prefix"],
-        adsb_cot_stale=config["adsb_cot_stale"],
-        adsb_cache_ttl=config["adsb_cache_ttl"],
-        adsb_rate_limit=config["adsb_rate_limit"],
-        adsb_min_alt=config["adsb_min_alt"],
-        adsb_max_alt=config["adsb_max_alt"],
     )
