@@ -339,7 +339,9 @@ def adsb_worker_loop(
             if lat is None or lon is None:
                 continue
 
-            alt = craft.get("alt_geom") or craft.get("alt_baro")
+            alt = craft.get("alt_geom")
+            if alt is None:
+                alt = craft.get("alt_baro")
             if min_alt and (alt is None or alt < min_alt):
                 continue
             if max_alt and alt is not None and alt > max_alt:
