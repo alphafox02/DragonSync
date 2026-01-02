@@ -362,7 +362,7 @@ fpv_confirm_only = true
 
 **Notes**
 
-- Source data comes from `scripts/fpv_energy_scan.py` (XPUB ZMQ).
+- Source data comes from the **wardragon-fpv-detect** repo (e.g., `scripts/fpv_energy_scan.py`) and is published over XPUB ZMQ.
 - `fpv_radius_m` controls how far the alert dot is offset from the kit location.
 - By default, only `confirm` alerts are ingested. Set `fpv_confirm_only = false` to include `energy`.
 
