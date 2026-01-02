@@ -20,6 +20,7 @@ Minimal read-only HTTP API for DragonSync/WarDragon.
 Endpoints:
   GET /status   -> system health and kit info
   GET /drones   -> list of drone/aircraft tracks (from DroneManager)
+  GET /signals  -> list of signal alerts (from SignalManager)
   GET /update/check -> git update availability (read-only)
 
 Notes:
@@ -47,6 +48,7 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
 
 class APIServer(BaseHTTPRequestHandler):
     manager = None
+    signal_manager = None
     system_status_provider = None  # callable -> obj or obj directly
     kit_id_provider = None  # callable -> str
     config_provider = None  # callable -> dict (sanitized)
@@ -71,6 +73,8 @@ class APIServer(BaseHTTPRequestHandler):
             self._handle_status()
         elif self.path.startswith("/drones"):
             self._handle_drones()
+        elif self.path.startswith("/signals"):
+            self._handle_signals()
         elif self.path.startswith("/config"):
             self._handle_config()
         elif self.path.startswith("/update/check"):
@@ -118,6 +122,18 @@ class APIServer(BaseHTTPRequestHandler):
             return
         self._write_json({"drones": drones})
 
+    def _handle_signals(self) -> None:
+        if self.signal_manager is None:
+            self._write_json({"error": "signal manager unavailable"}, status=503)
+            return
+        try:
+            signals: List[Dict[str, Any]] = self.signal_manager.export_signals()
+        except Exception as e:
+            logger.error("API signal export failed: %s", e)
+            self._write_json({"error": "signals unavailable"}, status=500)
+            return
+        self._write_json({"signals": signals})
+
     def _handle_config(self) -> None:
         if self.__class__.config_provider is None:
             self._write_json({"error": "config unavailable"}, status=503)
@@ -147,6 +163,7 @@ class APIServer(BaseHTTPRequestHandler):
 
 
 def serve_api(manager, system_status_provider, kit_id_provider, config_provider=None, update_check_provider=None,
+              signal_manager=None,
               host: str = None, port: int = None):
     """
     Start the API server in a background thread.
@@ -154,6 +171,7 @@ def serve_api(manager, system_status_provider, kit_id_provider, config_provider=
     host = host or os.environ.get("DRAGONSYNC_API_HOST", "0.0.0.0")
     port = port or int(os.environ.get("DRAGONSYNC_API_PORT", "8088"))
     APIServer.manager = manager
+    APIServer.signal_manager = signal_manager
     APIServer.system_status_provider = system_status_provider
     APIServer.kit_id_provider = kit_id_provider
     APIServer.config_provider = config_provider

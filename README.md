@@ -20,6 +20,7 @@ DragonSync can also ingest **ADS‑B / UAT (978 MHz)** aircraft data from a loca
 - [HTTP API (Read-Only)](#http-api-read-only)
 - [ADS-B / 978 Integration (Experimental)](#ads-b--978-integration-experimental)
 - [`config.ini` (WarDragon-tuned example)](#configini-wardragon-tuned-example)
+- [FPV Signals (Optional)](#fpv-signals-optional)
 - [Kismet Ingest (Optional)](#kismet-ingest-optional)
 - [Home Assistant (MQTT)](#home-assistant-mqtt)
 - [Static GPS (if no live GPS)](#static-gps-if-no-live-gps)
@@ -120,7 +121,9 @@ Sniffers (WiFi RID / BLE RID / DJI) --> ZMQ 4224
 WarDragon Monitor (GPS/system)      --> ZMQ 4225
 ADS-B / UAT via readsb (optional)   --> HTTP /?all_with_pos
 
-ZMQ 4224 + ZMQ 4225 + (HTTP) --> DragonSync --> CoT (multicast/TAK)
+FPV energy scan (optional)          --> ZMQ 4226
+
+ZMQ 4224 + ZMQ 4225 + ZMQ 4226 + (HTTP) --> DragonSync --> CoT (multicast/TAK)
                                               \-> MQTT (aggregate + per-drone)
                                               \-> Lattice (optional)
                                               \-> HTTP API (WarDragon ATAK companion)
@@ -128,6 +131,7 @@ ZMQ 4224 + ZMQ 4225 + (HTTP) --> DragonSync --> CoT (multicast/TAK)
 
 - **ZMQ 4224**: stream of decoded Remote ID / DJI frames.
 - **ZMQ 4225**: WarDragon system/GPS info from `wardragon_monitor.py`.
+- **ZMQ 4226**: FPV energy/confirm alerts from `fpv_energy_scan.py` (optional).
 - **readsb HTTP API**: aircraft list from local SDR(s), if enabled.
 - **DragonSync** merges streams, rate‑limits, and outputs:
   - **CoT** to ATAK/WinTAK via **multicast** _or_ **TAK server** (TCP/UDP, optional TLS).
@@ -172,6 +176,7 @@ The API is intended for the **WarDragon ATAK companion plugin** and exposes data
 
 - `GET /status` — system health + kit ID
 - `GET /drones` — drone + aircraft tracks (when enabled)
+- `GET /signals` — signal detections (FPV alerts, optional)
 - `GET /config` — sanitized config
 - `GET /update/check` — git update check (read‑only)
 
@@ -265,6 +270,16 @@ zmq_host = 127.0.0.1
 zmq_port = 4224          # Drone telemetry stream
 zmq_status_port = 4225   # WarDragon monitor (GPS, system)
 
+# FPV signals (optional)
+fpv_enabled = false
+fpv_zmq_host = 127.0.0.1
+fpv_zmq_port = 4226
+fpv_stale = 60
+fpv_radius_m = 15
+fpv_rate_limit = 2.0
+fpv_max_signals = 200
+fpv_confirm_only = true
+
 # TAK Server output (optional). If blank, TAK server is disabled.
 tak_host =
 tak_port =
@@ -325,6 +340,31 @@ adsb_json_url = http://127.0.0.1:8080/?all_with_pos
 adsb_min_alt = 0
 adsb_max_alt = 0
 ```
+
+---
+
+## FPV Signals (Optional)
+
+DragonSync can ingest **FPV energy/confirm alerts** from the WarDragon FPV scan and emit CoT spot reports. These are **not** drone tracks; they show as near‑kit alerts and are exposed via `GET /signals` for the ATAK plugin.
+
+**Enable**
+
+```ini
+fpv_enabled = true
+fpv_zmq_host = 127.0.0.1
+fpv_zmq_port = 4226
+fpv_stale = 60
+fpv_radius_m = 15
+fpv_rate_limit = 2.0
+fpv_max_signals = 200
+fpv_confirm_only = true
+```
+
+**Notes**
+
+- Source data comes from `scripts/fpv_energy_scan.py` (XPUB ZMQ).
+- `fpv_radius_m` controls how far the alert dot is offset from the kit location.
+- By default, only `confirm` alerts are ingested. Set `fpv_confirm_only = false` to include `energy`.
 
 ---
 

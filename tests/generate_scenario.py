@@ -13,6 +13,7 @@ test_drone_generator.py.
 Usage:
     python generate_scenario.py --lat 41.901 --lon -70.678
     python generate_scenario.py --lat 42.901 --lon -70.678 --seed 12345
+    python generate_scenario.py --lat 42.901 --lon -70.678 --fpv
 """
 
 import argparse
@@ -529,7 +530,12 @@ def generate_point_to_point_pattern(home_lat: float, home_lon: float, speed_ms: 
     return waypoints
 
 
-def generate_scenario(center_lat: float, center_lon: float, seed: int = None) -> Dict[str, Any]:
+def generate_scenario(
+    center_lat: float,
+    center_lon: float,
+    seed: int = None,
+    fpv_enabled: bool = False,
+) -> Dict[str, Any]:
     """
     Generate a complete scenario with 3 drones.
 
@@ -613,8 +619,22 @@ def generate_scenario(center_lat: float, center_lon: float, seed: int = None) ->
         "scenarios": {
             "static_detections": [],
             "animated_tracks": animated_tracks
-        }
+        },
     }
+    if fpv_enabled:
+        scenario["fpv"] = {
+            "enabled": True,
+            "port": 4226,
+            "interval": 2.0,
+            "source": "confirm",
+            "center_hz": 5785000000.0,
+            "bandwidth_hz": 6000000.0,
+            "lat": center_lat,
+            "lon": center_lon,
+            "alt": 300.0,
+            "pal": 65.0,
+            "ntsc": 20.0,
+        }
 
     return scenario
 
@@ -655,6 +675,9 @@ Examples:
 
   # Specify output filename
   python generate_scenario.py --lat 42.216 --lon -70.902 --output my_scenario.json
+
+  # Include FPV alert config
+  python generate_scenario.py --lat 42.216 --lon -70.902 --fpv
         """
     )
 
@@ -682,6 +705,11 @@ Examples:
         default=None,
         help="Output filename (default: scenario_XXYY_AABB.json based on coordinates)"
     )
+    parser.add_argument(
+        "--fpv",
+        action="store_true",
+        help="Include default FPV alert config in the scenario"
+    )
 
     args = parser.parse_args()
 
@@ -690,7 +718,7 @@ Examples:
     if args.seed is not None:
         print(f"Using random seed: {args.seed}")
 
-    scenario = generate_scenario(args.lat, args.lon, args.seed)
+    scenario = generate_scenario(args.lat, args.lon, args.seed, fpv_enabled=args.fpv)
 
     # Determine output filename
     if args.output:
@@ -707,6 +735,8 @@ Examples:
     print(f"\n✓ Scenario generated successfully: {output_filename}")
     print(f"\nScenario details:")
     print(f"  - {len(scenario['scenarios']['animated_tracks'])} drones")
+    if scenario.get("fpv", {}).get("enabled"):
+        print("  - FPV alerts enabled")
 
     for track in scenario['scenarios']['animated_tracks']:
         name = track['name']
