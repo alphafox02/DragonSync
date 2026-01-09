@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
 """
-MIT License
-
-Copyright (c) 2025 cemaxecuter
-
 Drone Scenario Generator for DragonSync Testing
 
 Generates realistic drone flight scenarios with randomized flight paths based on
