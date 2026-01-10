@@ -286,6 +286,9 @@ tak_port =
 tak_protocol =           # "tcp" or "udp"
 tak_tls_p12 =
 tak_tls_p12_pass =
+tak_tls_certfile =
+tak_tls_keyfile =
+tak_tls_cafile =
 tak_tls_skip_verify = true
 
 # Multicast CoT to ATAK (simple zero‑server option)
@@ -461,7 +464,9 @@ static_alt = 220
 
 ### TAK Server (unicast)
 - Set `tak_host`, `tak_port`, `tak_protocol` (`tcp` or `udp`).
-- For TLS servers, set `tak_tls_p12` and `tak_tls_p12_pass`.
+- For TLS servers, use **one** of:
+  - `tak_tls_p12` + `tak_tls_p12_pass`, or
+  - `tak_tls_certfile` + `tak_tls_keyfile` (+ optional `tak_tls_cafile`).
 - You can use `tak_tls_skip_verify=true` for testing self‑signed certs (turn off in production).
 
 ---
@@ -479,7 +484,8 @@ Enable with `lattice_enabled=true` and set either `lattice_base_url` or `lattice
 - **No entities in HA**: ensure `mqtt_enabled=true`, `per_drone_enabled=true`, `ha_enabled=true`. Watch `homeassistant/#` for discovery messages.
 - **Template warnings in HA**: DragonSync uses resilient templates (e.g., `| float(0)`), so you should not see float/None errors. If you customized templates, prefer `| float(0)`.
 - **Entities don’t disappear**: your DragonSync `DroneManager` should call `mark_inactive(drone_id)` on timeout (the WarDragon repo includes this). That sets HA trackers to **offline** while preserving history.
-- **TAK TLS**: verify `.p12` path/password; try `tak_tls_skip_verify=true` for dev.
+- **TAK TLS**: verify `.p12` path/password or PEM paths; try `tak_tls_skip_verify=true` for dev.
+- **OpenSSL 3 / legacy .p12**: older PKCS#12 files using RC2 may fail to load; convert to PEM or enable the legacy provider.
 - **ADS-B issues**: verify `readsb` is running and that `curl http://127.0.0.1:8080/?all_with_pos` returns JSON with an `aircraft` array.
 
 ---

@@ -134,13 +134,23 @@ def validate_config(config: Dict[str, Any]):
         # Validate TAK protocol-specific configurations
         if tak_protocol == 'TCP':
             tak_tls_p12 = config.get('tak_tls_p12')
-            tak_tls_p12_pass = config.get('tak_tls_p12_pass')
-            if not tak_tls_p12 or not tak_tls_p12_pass:
-                raise ValueError("TAK protocol is set to TCP but 'tak_tls_p12' or 'tak_tls_p12_pass' is missing.")
+            tak_tls_certfile = config.get('tak_tls_certfile')
+            tak_tls_keyfile = config.get('tak_tls_keyfile')
+            if not tak_tls_p12 and not (tak_tls_certfile and tak_tls_keyfile):
+                raise ValueError(
+                    "TAK protocol is set to TCP but no TLS credentials were provided. "
+                    "Set 'tak_tls_p12' or both 'tak_tls_certfile' and 'tak_tls_keyfile'."
+                )
         elif tak_protocol == 'UDP':
-            # For UDP, tak_tls_p12 and tak_tls_p12_pass should not be set
-            if config.get('tak_tls_p12') or config.get('tak_tls_p12_pass'):
-                logger.warning("TAK protocol is set to UDP. 'tak_tls_p12' and 'tak_tls_p12_pass' will be ignored.")
+            # For UDP, TLS fields should not be set
+            if (
+                config.get('tak_tls_p12')
+                or config.get('tak_tls_p12_pass')
+                or config.get('tak_tls_certfile')
+                or config.get('tak_tls_keyfile')
+                or config.get('tak_tls_cafile')
+            ):
+                logger.warning("TAK protocol is set to UDP. TLS fields will be ignored.")
     else:
         # If tak_host and tak_port are not both provided, ignore tak_protocol
         config['tak_protocol'] = None

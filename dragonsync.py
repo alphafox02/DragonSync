@@ -242,7 +242,32 @@ def setup_logging(debug: bool):
 
 logger = logging.getLogger(__name__)
 
-def setup_tls_context(tak_tls_p12: str, tak_tls_p12_pass: Optional[str], tak_tls_skip_verify: bool) -> Optional[ssl.SSLContext]:
+def setup_tls_context(
+    tak_tls_p12: Optional[str],
+    tak_tls_p12_pass: Optional[str],
+    tak_tls_certfile: Optional[str],
+    tak_tls_keyfile: Optional[str],
+    tak_tls_cafile: Optional[str],
+    tak_tls_skip_verify: bool,
+) -> Optional[ssl.SSLContext]:
+    """Sets up the TLS context using PKCS#12 or PEM files."""
+    if not tak_tls_p12 and not (tak_tls_certfile and tak_tls_keyfile):
+        return None
+
+    if tak_tls_p12:
+        if tak_tls_certfile or tak_tls_keyfile:
+            logger.warning("Both PKCS#12 and PEM TLS config provided; using PKCS#12.")
+        return setup_tls_context_from_p12(
+            tak_tls_p12, tak_tls_p12_pass, tak_tls_skip_verify
+        )
+    return setup_tls_context_from_pem(
+        tak_tls_certfile, tak_tls_keyfile, tak_tls_cafile, tak_tls_skip_verify
+    )
+
+
+def setup_tls_context_from_p12(
+    tak_tls_p12: str, tak_tls_p12_pass: Optional[str], tak_tls_skip_verify: bool
+) -> Optional[ssl.SSLContext]:
     """Sets up the TLS context using the provided PKCS#12 file."""
     if not tak_tls_p12:
         return None
@@ -311,6 +336,32 @@ def setup_tls_context(tak_tls_p12: str, tak_tls_p12_pass: Optional[str], tak_tls
             tls_context.verify_mode = ssl.CERT_NONE
     except Exception as e:
         logger.critical(f"Failed to set up TLS context: {e}")
+        sys.exit(1)
+
+    return tls_context
+
+
+def setup_tls_context_from_pem(
+    tak_tls_certfile: Optional[str],
+    tak_tls_keyfile: Optional[str],
+    tak_tls_cafile: Optional[str],
+    tak_tls_skip_verify: bool,
+) -> Optional[ssl.SSLContext]:
+    """Sets up the TLS context using PEM files."""
+    if not tak_tls_certfile or not tak_tls_keyfile:
+        logger.critical("TAK TLS PEM requires both 'tak_tls_certfile' and 'tak_tls_keyfile'.")
+        sys.exit(1)
+
+    try:
+        tls_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+        tls_context.load_cert_chain(certfile=tak_tls_certfile, keyfile=tak_tls_keyfile)
+        if tak_tls_cafile:
+            tls_context.load_verify_locations(cafile=tak_tls_cafile)
+        if tak_tls_skip_verify:
+            tls_context.check_hostname = False
+            tls_context.verify_mode = ssl.CERT_NONE
+    except Exception as e:
+        logger.critical(f"Failed to set up TLS context (PEM): {e}")
         sys.exit(1)
 
     return tls_context
@@ -882,6 +933,9 @@ if __name__ == "__main__":
     parser.add_argument("--tak-protocol", type=str, choices=['TCP', 'UDP'], help="TAK server communication protocol (TCP or UDP)")
     parser.add_argument("--tak-tls-p12", type=str, help="Path to TAK server TLS PKCS#12 file (optional, for TCP)")
     parser.add_argument("--tak-tls-p12-pass", type=str, help="Password for TAK server TLS PKCS#12 file (optional, for TCP)")
+    parser.add_argument("--tak-tls-certfile", type=str, help="Path to TAK TLS client cert (PEM, optional, for TCP)")
+    parser.add_argument("--tak-tls-keyfile", type=str, help="Path to TAK TLS client key (PEM, optional, for TCP)")
+    parser.add_argument("--tak-tls-cafile", type=str, help="Path to TAK TLS CA file (PEM, optional, for TCP)")
     parser.add_argument("--tak-tls-skip-verify", action="store_true", help="(UNSAFE) Disable TLS server verification")
     parser.add_argument("--tak-multicast-addr", type=str, help="TAK multicast address (optional)")
     parser.add_argument("--tak-multicast-port", type=int, help="TAK multicast port (optional)")
@@ -961,6 +1015,9 @@ if __name__ == "__main__":
         "tak_protocol": tak_protocol,
         "tak_tls_p12": args.tak_tls_p12 if args.tak_tls_p12 is not None else get_str(config_values.get("tak_tls_p12")),
         "tak_tls_p12_pass": args.tak_tls_p12_pass if args.tak_tls_p12_pass is not None else get_str(config_values.get("tak_tls_p12_pass")),
+        "tak_tls_certfile": args.tak_tls_certfile if args.tak_tls_certfile is not None else get_str(config_values.get("tak_tls_certfile")),
+        "tak_tls_keyfile": args.tak_tls_keyfile if args.tak_tls_keyfile is not None else get_str(config_values.get("tak_tls_keyfile")),
+        "tak_tls_cafile": args.tak_tls_cafile if args.tak_tls_cafile is not None else get_str(config_values.get("tak_tls_cafile")),
         "tak_tls_skip_verify": args.tak_tls_skip_verify if args.tak_tls_skip_verify else get_bool(config_values.get("tak_tls_skip_verify"), False),
         "api_enabled": get_bool(config_values.get("api_enabled"), True),
         "api_host": get_str(config_values.get("api_host", "0.0.0.0")),
@@ -1074,7 +1131,10 @@ if __name__ == "__main__":
                 "enable_receive": bool(config.get("enable_receive")),
                 "multicast_interface": config.get("tak_multicast_interface"),
                 "multicast_ttl": config.get("multicast_ttl"),
-                "tls": bool(config.get("tak_tls_p12")),
+                "tls": bool(
+                    config.get("tak_tls_p12")
+                    or (config.get("tak_tls_certfile") and config.get("tak_tls_keyfile"))
+                ),
             }
             cfg["api"] = {
                 "enabled": bool(config.get("api_enabled", True)),
@@ -1132,8 +1192,14 @@ if __name__ == "__main__":
     tak_tls_context = setup_tls_context(
         tak_tls_p12=config["tak_tls_p12"],
         tak_tls_p12_pass=config["tak_tls_p12_pass"],
-        tak_tls_skip_verify=config["tak_tls_skip_verify"]
-    ) if config["tak_protocol"] == 'TCP' and config["tak_tls_p12"] else None
+        tak_tls_certfile=config.get("tak_tls_certfile"),
+        tak_tls_keyfile=config.get("tak_tls_keyfile"),
+        tak_tls_cafile=config.get("tak_tls_cafile"),
+        tak_tls_skip_verify=config["tak_tls_skip_verify"],
+    ) if config["tak_protocol"] == 'TCP' and (
+        config["tak_tls_p12"]
+        or (config.get("tak_tls_certfile") and config.get("tak_tls_keyfile"))
+    ) else None
 
     # MQTT sink (optional)
     mqtt_sink = None
