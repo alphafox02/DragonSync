@@ -20,7 +20,7 @@ DragonSync can also ingest **ADS‑B / UAT (978 MHz)** aircraft data from a loca
 - [HTTP API (Read-Only)](#http-api-read-only)
 - [ADS-B / 978 Integration (Experimental)](#ads-b--978-integration-experimental)
 - [`config.ini` (WarDragon-tuned example)](#configini-wardragon-tuned-example)
-- [FPV Signals (Optional)](#fpv-signals-optional)
+- [Signal Alerts (Optional)](#signal-alerts-optional)
 - [Kismet Ingest (Optional)](#kismet-ingest-optional)
 - [Home Assistant (MQTT)](#home-assistant-mqtt)
 - [Static GPS (if no live GPS)](#static-gps-if-no-live-gps)
@@ -325,11 +325,33 @@ ha_enabled = true
 ha_prefix = homeassistant
 ha_device_base = wardragon_drone
 #
-# FPV signal alerts (optional)
+# Signal alerts (optional)
 mqtt_signals_enabled = false
 mqtt_signals_topic = wardragon/signals
 mqtt_ha_signal_tracker = false
-mqtt_ha_signal_id = fpv_signal
+mqtt_ha_signal_id = signal_latest
+
+### MQTT options explained
+- `mqtt_enabled`: master switch for MQTT output.
+- `mqtt_host` / `mqtt_port`: broker location.
+- `mqtt_topic`: **aggregate** stream where each drone update is a JSON message.
+- `per_drone_enabled`: publish per‑drone state to `mqtt_per_drone_base/<drone_id>` (required for HA discovery).
+- `mqtt_per_drone_base`: base topic for per‑drone JSON.
+- `mqtt_retain`: retain last state on broker (recommended for HA dashboards).
+- `mqtt_username` / `mqtt_password`: broker auth.
+- `mqtt_tls`: enable TLS to broker; set `mqtt_ca_file` and optionally `mqtt_certfile`/`mqtt_keyfile`.
+- `mqtt_tls_insecure`: skip TLS hostname/chain verification (dev only).
+- `mqtt_ha_enabled`: publish Home Assistant discovery entities.
+- `mqtt_ha_prefix`: HA discovery topic prefix (default `homeassistant`).
+- `mqtt_ha_device_base`: HA device ID prefix for drones.
+- `mqtt_signals_enabled`: publish signal alerts to MQTT.
+- `mqtt_signals_topic`: topic for signal alerts (JSON).
+- `mqtt_ha_signal_tracker`: create a **single** HA map dot that jumps to the latest signal.
+- `mqtt_ha_signal_id`: unique ID suffix for the HA signal entity.
+
+**Hard‑coded system topics** (not configurable yet):
+- `wardragon/system/attrs` (kit status attributes)
+- `wardragon/system/availability` and `wardragon/service/availability`
 
 # Lattice (optional)
 lattice_enabled = false
@@ -352,9 +374,9 @@ adsb_max_alt = 0
 
 ---
 
-## FPV Signals (Optional)
+## Signal Alerts (Optional)
 
-DragonSync can ingest **FPV energy/confirm alerts** from the WarDragon FPV scan and emit CoT spot reports. These are **not** drone tracks; they show as near‑kit alerts and are exposed via `GET /signals` for the ATAK plugin.
+DragonSync can ingest **signal alerts** (currently FPV energy/confirm from the WarDragon FPV scan) and emit CoT spot reports. These are **not** drone tracks; they show as near‑kit alerts and are exposed via `GET /signals` for the ATAK plugin.
 
 **Enable**
 
@@ -434,7 +456,7 @@ sudo systemctl enable --now mosquitto
 - **Device trackers**: `drone-<id>` (main dot), `pilot-<id-tail>`, `home-<id-tail>` (if pilot/home known).
 - **Sensors**: lat/lon/alt/speed/vspeed/course/AGL/RSSI/freq_mhz/etc.
 - **Signals (optional)**: if `mqtt_signals_enabled=true`, publishes FPV alerts to `wardragon/signals`.
-- **HA signal dot (optional)**: set `mqtt_ha_signal_tracker=true` to create a single “FPV Signal” device_tracker that jumps to the latest alert.
+- **HA signal dot (optional)**: set `mqtt_ha_signal_tracker=true` to create a single “Signal Alert” device_tracker that jumps to the latest alert.
 
 **Behavior on timeout**: when a drone stops updating for `inactivity_timeout`, DragonSync marks the trackers **offline** (hidden on the map) but **keeps last‑known location in HA history**.
 

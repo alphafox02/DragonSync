@@ -224,10 +224,11 @@ def start_signal_worker(
                     center_mhz = int(round(float(center_hz) / 1e6))
                 except (TypeError, ValueError):
                     center_mhz = None
+                signal_type = alert.get("signal_type") or "fpv"
                 if center_mhz is not None:
-                    uid = f"fpv-alert-{center_mhz}MHz"
+                    uid = f"{signal_type}-alert-{center_mhz}MHz"
                 else:
-                    uid = alert.get("alert_id") or "fpv-alert-unknown"
+                    uid = alert.get("alert_id") or f"{signal_type}-alert-unknown"
                 source = alert.get("source") or "unknown"
                 alert_id = alert.get("alert_id")
                 now = time.time()
@@ -264,7 +265,7 @@ def start_signal_worker(
 
                 signal = {
                     "uid": uid,
-                    "signal_type": "fpv",
+                    "signal_type": signal_type,
                     "source": source,
                     "alert_id": alert_id,
                     "callsign": callsign,

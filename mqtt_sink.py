@@ -77,7 +77,7 @@ class MqttSink:
         # HA signal tracker (optional)
         ha_signal_tracker: bool = False,
         ha_signal_base: str = "wardragon_signal",
-        ha_signal_id: str = "fpv_signal",
+        ha_signal_id: str = "signal_latest",
         # Home Assistant
         ha_enabled: bool = False,
         ha_prefix: str = "homeassistant",
@@ -454,13 +454,13 @@ class MqttSink:
         base_unique = f"{self.ha_signal_base}_{self.ha_signal_id}"
         device = {
             "identifiers": [f"{self.ha_signal_base}:{self.ha_signal_id}"],
-            "name": "FPV Signal",
+            "name": "Signal Alert",
         }
         cfg_topic = f"{self.ha_prefix}/device_tracker/{base_unique}/config"
         state_topic = self._signal_state_topic
         attr_topic = self.signals_topic
         payload = {
-            "name": "FPV Signal",
+            "name": "Signal Alert",
             "unique_id": base_unique,
             "device": device,
             "source_type": "gps",

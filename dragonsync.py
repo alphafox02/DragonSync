@@ -1052,7 +1052,7 @@ if __name__ == "__main__":
         "mqtt_signals_enabled": get_bool(config_values.get("mqtt_signals_enabled", False)),
         "mqtt_signals_topic": get_str(config_values.get("mqtt_signals_topic", "wardragon/signals")),
         "mqtt_ha_signal_tracker": get_bool(config_values.get("mqtt_ha_signal_tracker", False)),
-        "mqtt_ha_signal_id": get_str(config_values.get("mqtt_ha_signal_id", "fpv_signal")),
+        "mqtt_ha_signal_id": get_str(config_values.get("mqtt_ha_signal_id", "signal_latest")),
 
         # ---- Kismet (optional) config ----
         "kismet_enabled": get_bool(config_values.get("kismet_enabled"), False),
@@ -1241,7 +1241,7 @@ if __name__ == "__main__":
                 ha_prefix=config.get("mqtt_ha_prefix", "homeassistant"),
                 ha_device_base=config.get("mqtt_ha_device_base", "wardragon_drone"),
                 ha_signal_tracker=bool(config.get("mqtt_ha_signal_tracker", False)),
-                ha_signal_id=config.get("mqtt_ha_signal_id", "fpv_signal"),
+                ha_signal_id=config.get("mqtt_ha_signal_id", "signal_latest"),
             )
             logger.info("MQTT sink enabled.")
         except Exception as e:
