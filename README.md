@@ -324,6 +324,12 @@ per_drone_base = wardragon/drone
 ha_enabled = true
 ha_prefix = homeassistant
 ha_device_base = wardragon_drone
+#
+# FPV signal alerts (optional)
+mqtt_signals_enabled = false
+mqtt_signals_topic = wardragon/signals
+mqtt_ha_signal_tracker = false
+mqtt_ha_signal_id = fpv_signal
 
 # Lattice (optional)
 lattice_enabled = false
@@ -427,6 +433,8 @@ sudo systemctl enable --now mosquitto
 ### Entities created by DragonSync
 - **Device trackers**: `drone-<id>` (main dot), `pilot-<id-tail>`, `home-<id-tail>` (if pilot/home known).
 - **Sensors**: lat/lon/alt/speed/vspeed/course/AGL/RSSI/freq_mhz/etc.
+- **Signals (optional)**: if `mqtt_signals_enabled=true`, publishes FPV alerts to `wardragon/signals`.
+- **HA signal dot (optional)**: set `mqtt_ha_signal_tracker=true` to create a single “FPV Signal” device_tracker that jumps to the latest alert.
 
 **Behavior on timeout**: when a drone stops updating for `inactivity_timeout`, DragonSync marks the trackers **offline** (hidden on the map) but **keeps last‑known location in HA history**.
 

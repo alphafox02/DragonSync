@@ -527,6 +527,7 @@ def zmq_to_cot(
                 zmq_port=int(config.get("fpv_zmq_port", 4226)),
                 cot_messenger=cot_messenger,
                 signal_manager=signal_manager,
+                mqtt_sink=mqtt_sink,
                 stale_s=float(config.get("fpv_stale", 60.0)),
                 radius_m=float(config.get("fpv_radius_m", 15.0)),
                 min_send_interval=float(config.get("fpv_rate_limit", 2.0)),
@@ -1048,6 +1049,10 @@ if __name__ == "__main__":
         "mqtt_ha_enabled": args.mqtt_ha_enabled if hasattr(args, "mqtt_ha_enabled") and args.mqtt_ha_enabled is not None else get_bool(config_values.get("mqtt_ha_enabled", False)),
         "mqtt_ha_prefix": args.mqtt_ha_prefix if hasattr(args, "mqtt_ha_prefix") and args.mqtt_ha_prefix is not None else get_str(config_values.get("mqtt_ha_prefix", "homeassistant")),
         "mqtt_ha_device_base": args.mqtt_ha_device_base if hasattr(args, "mqtt_ha_device_base") and args.mqtt_ha_device_base is not None else get_str(config_values.get("mqtt_ha_device_base", "wardragon_drone")),
+        "mqtt_signals_enabled": get_bool(config_values.get("mqtt_signals_enabled", False)),
+        "mqtt_signals_topic": get_str(config_values.get("mqtt_signals_topic", "wardragon/signals")),
+        "mqtt_ha_signal_tracker": get_bool(config_values.get("mqtt_ha_signal_tracker", False)),
+        "mqtt_ha_signal_id": get_str(config_values.get("mqtt_ha_signal_id", "fpv_signal")),
 
         # ---- Kismet (optional) config ----
         "kismet_enabled": get_bool(config_values.get("kismet_enabled"), False),
@@ -1155,6 +1160,10 @@ if __name__ == "__main__":
                 "per_drone_base": config.get("mqtt_per_drone_base"),
                 "ha_enabled": bool(config.get("mqtt_ha_enabled")),
                 "ha_prefix": config.get("mqtt_ha_prefix"),
+                "signals_enabled": bool(config.get("mqtt_signals_enabled")),
+                "signals_topic": config.get("mqtt_signals_topic"),
+                "ha_signal_tracker": bool(config.get("mqtt_ha_signal_tracker")),
+                "ha_signal_id": config.get("mqtt_ha_signal_id"),
             }
             cfg["adsb"] = {
                 "enabled": bool(config.get("adsb_enabled")),
@@ -1226,9 +1235,13 @@ if __name__ == "__main__":
                 retain_state=bool(config.get("mqtt_retain", True)),
                 per_drone_enabled=bool(config.get("mqtt_per_drone_enabled", False)),
                 per_drone_base=config.get("mqtt_per_drone_base", "wardragon/drone"),
+                signals_enabled=bool(config.get("mqtt_signals_enabled", False)),
+                signals_topic=config.get("mqtt_signals_topic", "wardragon/signals"),
                 ha_enabled=bool(config.get("mqtt_ha_enabled", False)),
                 ha_prefix=config.get("mqtt_ha_prefix", "homeassistant"),
                 ha_device_base=config.get("mqtt_ha_device_base", "wardragon_drone"),
+                ha_signal_tracker=bool(config.get("mqtt_ha_signal_tracker", False)),
+                ha_signal_id=config.get("mqtt_ha_signal_id", "fpv_signal"),
             )
             logger.info("MQTT sink enabled.")
         except Exception as e:

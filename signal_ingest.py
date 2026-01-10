@@ -158,6 +158,7 @@ def start_signal_worker(
     zmq_port: int,
     cot_messenger: Any,
     signal_manager: Any,
+    mqtt_sink: Optional[Any] = None,
     stale_s: float = 30.0,
     radius_m: float = 15.0,
     min_send_interval: float = 2.0,
@@ -286,6 +287,11 @@ def start_signal_worker(
                 if signal_manager is not None:
                     try:
                         signal_manager.add_signal(signal)
+                    except Exception:
+                        pass
+                if mqtt_sink is not None:
+                    try:
+                        mqtt_sink.publish_signal(signal)
                     except Exception:
                         pass
 

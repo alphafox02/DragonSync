@@ -71,6 +71,13 @@ class MqttSink:
         per_drone_enabled: bool = False,
         per_drone_base: str = "wardragon/drone",
         retain_state: bool = False,
+        # Signals (optional)
+        signals_enabled: bool = False,
+        signals_topic: str = "wardragon/signals",
+        # HA signal tracker (optional)
+        ha_signal_tracker: bool = False,
+        ha_signal_base: str = "wardragon_signal",
+        ha_signal_id: str = "fpv_signal",
         # Home Assistant
         ha_enabled: bool = False,
         ha_prefix: str = "homeassistant",
@@ -86,12 +93,22 @@ class MqttSink:
         self.per_drone_enabled = bool(per_drone_enabled)
         self.per_drone_base = per_drone_base.strip().strip("/")
 
+        self.signals_enabled = bool(signals_enabled)
+        self.signals_topic = signals_topic.strip().strip("/") if signals_topic else ""
+        self._signal_state_topic = (
+            f"{self.signals_topic}/state" if self.signals_topic else ""
+        )
+
         self.ha_enabled = bool(ha_enabled)
         self.ha_prefix = ha_prefix.strip().strip("/")
         self.ha_device_base = ha_device_base.strip()
+        self.ha_signal_tracker = bool(ha_signal_tracker)
+        self.ha_signal_base = ha_signal_base.strip()
+        self.ha_signal_id = ha_signal_id.strip()
 
         self._seen_for_ha: set[str] = set()
         self._state_cache: Dict[str, Dict[str, Any]] = {}
+        self._ha_signal_announced = False
 
         # system device (WarDragon kit) tracking
         self._ha_system_announced = False
@@ -296,6 +313,11 @@ class MqttSink:
                 self.client.publish("wardragon/service/availability", "offline", qos=self.qos, retain=True)
             except Exception:
                 pass
+            if self.signals_topic:
+                try:
+                    self.client.publish(f"{self.signals_topic}/availability", "offline", qos=self.qos, retain=True)
+                except Exception:
+                    pass
             self.client.loop_stop()
         except Exception as e:
             _log.warning("MqttSink loop_stop error: %s", e)
@@ -349,6 +371,36 @@ class MqttSink:
             except Exception as e:
                 _log.warning("Per-drone publish failed for %s: %s", drone_id, e)
 
+    def publish_signal(self, signal: Dict[str, Any]) -> None:
+        """
+        Publish a signal alert payload (e.g., FPV) to a dedicated topic.
+        """
+        if not self.signals_enabled or not self.signals_topic:
+            return
+        try:
+            payload = json.dumps(self._signal_to_state(signal), default=_json_default)
+            info = self.client.publish(
+                self.signals_topic, payload, qos=self.qos, retain=self.retain_state
+            )
+            self._warn_if_publish_failed(info)
+            if self.ha_enabled and self.ha_signal_tracker:
+                self._ensure_ha_signal_tracker()
+                if self._signal_state_topic:
+                    self.client.publish(
+                        self._signal_state_topic,
+                        "not_home",
+                        qos=self.qos,
+                        retain=self.retain_state,
+                    )
+                    self.client.publish(
+                        f"{self.signals_topic}/availability",
+                        "online",
+                        qos=self.qos,
+                        retain=True,
+                    )
+        except Exception as e:
+            _log.warning("Signal publish failed: %s", e)
+
     def _warn_if_publish_failed(self, info) -> None:
         try:
             rc = getattr(info, "rc", None)
@@ -360,6 +412,34 @@ class MqttSink:
     def _per_drone_topic(self, drone_id: str) -> str:
         return f"{self.per_drone_base}/{drone_id}"
 
+    def _signal_to_state(self, sig: Dict[str, Any]) -> Dict[str, Any]:
+        lat = _f(sig.get("lat", 0.0))
+        lon = _f(sig.get("lon", 0.0))
+        state = {
+            "uid": sig.get("uid"),
+            "signal_type": sig.get("signal_type", "fpv"),
+            "source": sig.get("source"),
+            "callsign": sig.get("callsign"),
+            "description": sig.get("description"),
+            "center_hz": _f_or_none(sig.get("center_hz")),
+            "bandwidth_hz": _f_or_none(sig.get("bandwidth_hz")),
+            "pal": _f_or_none(sig.get("pal_conf")),
+            "ntsc": _f_or_none(sig.get("ntsc_conf")),
+            "sensor_lat": _f_or_none(sig.get("sensor_lat")),
+            "sensor_lon": _f_or_none(sig.get("sensor_lon")),
+            "sensor_alt": _f_or_none(sig.get("sensor_alt")),
+            "lat": lat,
+            "lon": lon,
+            "alt": _f(sig.get("alt", 0.0)),
+            "latitude": lat,
+            "longitude": lon,
+            "gps_accuracy": _f(sig.get("radius_m", 0.0)),
+            "radius_m": _f(sig.get("radius_m", 0.0)),
+            "seen_by": sig.get("seen_by"),
+            "observed_at": sig.get("observed_at", None),
+        }
+        return state
+
     def _availability_topics(self, drone_id: str):
         base = self._per_drone_topic(drone_id)
         return (
@@ -367,6 +447,32 @@ class MqttSink:
             f"{base}/pilot_availability", # pilot tracker
             f"{base}/home_availability",  # home tracker
         )
+
+    def _ensure_ha_signal_tracker(self) -> None:
+        if self._ha_signal_announced or not self.signals_topic:
+            return
+        base_unique = f"{self.ha_signal_base}_{self.ha_signal_id}"
+        device = {
+            "identifiers": [f"{self.ha_signal_base}:{self.ha_signal_id}"],
+            "name": "FPV Signal",
+        }
+        cfg_topic = f"{self.ha_prefix}/device_tracker/{base_unique}/config"
+        state_topic = self._signal_state_topic
+        attr_topic = self.signals_topic
+        payload = {
+            "name": "FPV Signal",
+            "unique_id": base_unique,
+            "device": device,
+            "source_type": "gps",
+            "state_topic": state_topic,
+            "json_attributes_topic": attr_topic,
+            "icon": "mdi:radio-tower",
+            "availability_topic": f"{self.signals_topic}/availability",
+            "payload_available": "online",
+            "payload_not_available": "offline",
+        }
+        self.client.publish(cfg_topic, json.dumps(payload), qos=self.qos, retain=True)
+        self._ha_signal_announced = True
 
     def _drone_to_state(self, d: Any) -> Dict[str, Any]:
         """
