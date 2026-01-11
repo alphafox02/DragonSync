@@ -307,6 +307,7 @@ def start_signal_worker(
                         radius_m,
                         seen_by,
                     )
+                    logger.debug("FPV signal CoT XML: %s", cot.decode("utf-8", errors="ignore"))
                     cot_messenger.send_cot(cot)
                 except Exception as e:
                     logger.debug("FPV signal CoT send failed: %s", e)
