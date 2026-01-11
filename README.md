@@ -346,7 +346,7 @@ mqtt_ha_signal_id = signal_latest
 - `mqtt_ha_device_base`: HA device ID prefix for drones.
 - `mqtt_signals_enabled`: publish signal alerts to MQTT.
 - `mqtt_signals_topic`: topic for signal alerts (JSON).
-- `mqtt_ha_signal_tracker`: create a **single** HA map dot that jumps to the latest signal.
+- `mqtt_ha_signal_tracker`: create a **per‑kit** HA map dot that jumps to the latest signal seen by that kit (uses `seen_by`).
 - `mqtt_ha_signal_id`: unique ID suffix for the HA signal entity.
 
 **Hard‑coded system topics** (not configurable yet):
@@ -377,6 +377,8 @@ adsb_max_alt = 0
 ## Signal Alerts (Optional)
 
 DragonSync can ingest **signal alerts** (currently FPV energy/confirm from the WarDragon FPV scan) and emit CoT spot reports. These are **not** drone tracks; they show as near‑kit alerts and are exposed via `GET /signals` for the ATAK plugin.
+
+If MQTT is enabled with `mqtt_signals_enabled=true`, alerts are also published to `wardragon/signals`. When `mqtt_ha_signal_tracker=true`, DragonSync publishes per‑kit signal attributes to `wardragon/signals/<seen_by>` for HA map dots.
 
 **Enable**
 
@@ -455,8 +457,8 @@ sudo systemctl enable --now mosquitto
 ### Entities created by DragonSync
 - **Device trackers**: `drone-<id>` (main dot), `pilot-<id-tail>`, `home-<id-tail>` (if pilot/home known).
 - **Sensors**: lat/lon/alt/speed/vspeed/course/AGL/RSSI/freq_mhz/etc.
-- **Signals (optional)**: if `mqtt_signals_enabled=true`, publishes FPV alerts to `wardragon/signals`.
-- **HA signal dot (optional)**: set `mqtt_ha_signal_tracker=true` to create a single “Signal Alert” device_tracker that jumps to the latest alert.
+- **Signals (optional)**: if `mqtt_signals_enabled=true`, publishes alerts to `wardragon/signals`.
+- **HA signal dot (optional)**: set `mqtt_ha_signal_tracker=true` to create a per‑kit “Signal Alert” device_tracker that jumps to the latest alert from that kit.
 
 **Behavior on timeout**: when a drone stops updating for `inactivity_timeout`, DragonSync marks the trackers **offline** (hidden on the map) but **keeps last‑known location in HA history**.
 

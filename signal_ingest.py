@@ -110,9 +110,10 @@ def _build_cot(
     stale = (now + datetime.timedelta(seconds=stale_s)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
     uid = alert["uid"]
-    callsign = alert.get("callsign") or "FPV Signal"
+    signal_type = alert.get("signal_type") or "fpv"
+    callsign = alert.get("callsign") or f"{signal_type.upper()} Signal"
 
-    remarks_parts = ["signal=fpv"]
+    remarks_parts = [f"signal={signal_type}"]
     if alert.get("source") is not None:
         remarks_parts.append(f"source={alert.get('source')}")
     if alert.get("center_hz") is not None:
