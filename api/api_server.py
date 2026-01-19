@@ -35,11 +35,16 @@ Notes:
 import json
 import logging
 import os
+import time
+from collections import defaultdict
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
 from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
+
+# Rate limiting: track request times per IP address
+_request_times: Dict[str, List[float]] = defaultdict(list)
 
 
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
@@ -68,7 +73,36 @@ class APIServer(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _rate_limit_check(self, max_requests: int = 100, window: int = 60) -> bool:
+        """
+        Check if client IP has exceeded rate limit.
+        Default: 100 requests per 60 seconds per IP.
+        Returns True if request allowed, False if rate limited.
+        """
+        client_ip = self.client_address[0]
+        now = time.time()
+
+        # Clean up old request times outside the window
+        _request_times[client_ip] = [t for t in _request_times[client_ip] if now - t < window]
+
+        # Check if limit exceeded
+        if len(_request_times[client_ip]) >= max_requests:
+            logger.warning(f"Rate limit exceeded for {client_ip}: {len(_request_times[client_ip])} requests in {window}s")
+            return False
+
+        # Record this request
+        _request_times[client_ip].append(now)
+        return True
+
     def do_GET(self) -> None:
+        # Rate limiting check
+        if not self._rate_limit_check():
+            self.send_response(429)  # Too Many Requests
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Retry-After", "60")
+            self.end_headers()
+            self.wfile.write(b'{"error": "rate limit exceeded"}')
+            return
         if self.path.startswith("/status"):
             self._handle_status()
         elif self.path.startswith("/drones"):
