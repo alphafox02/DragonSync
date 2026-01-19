@@ -150,128 +150,131 @@ def start_signal_worker(
         poller = zmq.Poller()
         poller.register(socket, zmq.POLLIN)
 
-        while not stop_event.is_set():
-            try:
-                socks = dict(poller.poll(timeout=500))
-            except zmq.error.ZMQError as e:
-                if e.errno == getattr(zmq, "ETERM", None):
-                    break
-                logger.warning("FPV signal poll error: %s", e)
-                time.sleep(0.5)
-                continue
-
-            if socket not in socks or socks[socket] != zmq.POLLIN:
-                continue
-
-            try:
-                message = socket.recv_json()
-            except Exception as e:
-                logger.debug("FPV signal recv failed: %s", e)
-                continue
-
-            try:
-                alert = _parse_fpv_alert(message)
-                if not alert:
-                    continue
-                if confirm_only and alert.get("source") != "confirm":
-                    continue
-
-                center_hz = alert.get("center_hz")
+        try:
+            while not stop_event.is_set():
                 try:
-                    center_mhz = int(round(float(center_hz) / 1e6))
-                except (TypeError, ValueError):
-                    center_mhz = None
-                signal_type = alert.get("signal_type") or "fpv"
-                if center_mhz is not None:
-                    uid = f"{signal_type}-alert-{center_mhz}MHz"
-                else:
-                    uid = alert.get("alert_id") or f"{signal_type}-alert-unknown"
-                source = alert.get("source") or "unknown"
-                alert_id = alert.get("alert_id")
-                now = time.time()
-                last = last_sent.get(uid, 0.0)
-                if now - last < min_send_interval:
+                    socks = dict(poller.poll(timeout=500))
+                except zmq.error.ZMQError as e:
+                    if e.errno == getattr(zmq, "ETERM", None):
+                        break
+                    logger.warning("FPV signal poll error: %s", e)
+                    time.sleep(0.5)
                     continue
-                last_sent[uid] = now
 
-                sensor_lat = alert.get("sensor_lat")
-                sensor_lon = alert.get("sensor_lon")
-                sensor_alt = alert.get("sensor_alt", 0.0)
-                if sensor_lat is None or sensor_lon is None:
-                    system_loc = _get_system_location()
-                    if system_loc:
-                        sensor_lat, sensor_lon, sensor_alt = system_loc
-                if sensor_lat is None or sensor_lon is None:
+                if socket not in socks or socks[socket] != zmq.POLLIN:
                     continue
 
                 try:
-                    base_lat = float(sensor_lat)
-                    base_lon = float(sensor_lon)
-                except (TypeError, ValueError):
-                    continue
-
-                offset_lat, offset_lon = _offset_latlon(
-                    base_lat,
-                    base_lon,
-                    radius_m,
-                    uid,
-                )
-
-                seen_by = seen_by_provider() if callable(seen_by_provider) else None
-                callsign = f"FPV {source}".strip()
-
-                signal = {
-                    "uid": uid,
-                    "signal_type": signal_type,
-                    "source": source,
-                    "alert_id": alert_id,
-                    "callsign": callsign,
-                    "description": alert.get("description"),
-                    "self_id": alert.get("self_id"),
-                    "center_hz": alert.get("center_hz"),
-                    "bandwidth_hz": alert.get("bandwidth_hz"),
-                    "pal_conf": alert.get("pal_conf"),
-                    "ntsc_conf": alert.get("ntsc_conf"),
-                    "sensor_lat": base_lat,
-                    "sensor_lon": base_lon,
-                    "sensor_alt": float(sensor_alt or 0.0),
-                    "lat": float(offset_lat),
-                    "lon": float(offset_lon),
-                    "alt": float(sensor_alt or 0.0),
-                    "radius_m": float(radius_m),
-                    "seen_by": seen_by,
-                }
-
-                if signal_manager is not None:
-                    try:
-                        signal_manager.add_signal(signal)
-                    except Exception:
-                        pass
-                if mqtt_sink is not None:
-                    try:
-                        mqtt_sink.publish_signal(signal)
-                    except Exception:
-                        pass
-
-                try:
-                    cot = _build_cot(
-                        signal,
-                        float(offset_lat),
-                        float(offset_lon),
-                        float(sensor_alt or 0.0),
-                        stale_s,
-                        radius_m,
-                        seen_by,
-                    )
-                    logger.debug("FPV signal CoT XML: %s", cot.decode("utf-8", errors="ignore"))
-                    cot_messenger.send_cot(cot)
+                    message = socket.recv_json()
                 except Exception as e:
-                    logger.debug("FPV signal CoT send failed: %s", e)
-            except Exception as e:
-                logger.warning("FPV signal ingest error; skipping message: %s", e)
+                    logger.debug("FPV signal recv failed: %s", e)
+                    continue
 
-        socket.close(0)
-        context.term()
+                try:
+                    alert = _parse_fpv_alert(message)
+                    if not alert:
+                        continue
+                    if confirm_only and alert.get("source") != "confirm":
+                        continue
+
+                    center_hz = alert.get("center_hz")
+                    try:
+                        center_mhz = int(round(float(center_hz) / 1e6))
+                    except (TypeError, ValueError):
+                        center_mhz = None
+                    signal_type = alert.get("signal_type") or "fpv"
+                    if center_mhz is not None:
+                        uid = f"{signal_type}-alert-{center_mhz}MHz"
+                    else:
+                        uid = alert.get("alert_id") or f"{signal_type}-alert-unknown"
+                    source = alert.get("source") or "unknown"
+                    alert_id = alert.get("alert_id")
+                    now = time.time()
+                    last = last_sent.get(uid, 0.0)
+                    if now - last < min_send_interval:
+                        continue
+                    last_sent[uid] = now
+
+                    sensor_lat = alert.get("sensor_lat")
+                    sensor_lon = alert.get("sensor_lon")
+                    sensor_alt = alert.get("sensor_alt", 0.0)
+                    if sensor_lat is None or sensor_lon is None:
+                        system_loc = _get_system_location()
+                        if system_loc:
+                            sensor_lat, sensor_lon, sensor_alt = system_loc
+                    if sensor_lat is None or sensor_lon is None:
+                        continue
+
+                    try:
+                        base_lat = float(sensor_lat)
+                        base_lon = float(sensor_lon)
+                    except (TypeError, ValueError):
+                        continue
+
+                    offset_lat, offset_lon = _offset_latlon(
+                        base_lat,
+                        base_lon,
+                        radius_m,
+                        uid,
+                    )
+
+                    seen_by = seen_by_provider() if callable(seen_by_provider) else None
+                    callsign = f"FPV {source}".strip()
+
+                    signal = {
+                        "uid": uid,
+                        "signal_type": signal_type,
+                        "source": source,
+                        "alert_id": alert_id,
+                        "callsign": callsign,
+                        "description": alert.get("description"),
+                        "self_id": alert.get("self_id"),
+                        "center_hz": alert.get("center_hz"),
+                        "bandwidth_hz": alert.get("bandwidth_hz"),
+                        "pal_conf": alert.get("pal_conf"),
+                        "ntsc_conf": alert.get("ntsc_conf"),
+                        "sensor_lat": base_lat,
+                        "sensor_lon": base_lon,
+                        "sensor_alt": float(sensor_alt or 0.0),
+                        "lat": float(offset_lat),
+                        "lon": float(offset_lon),
+                        "alt": float(sensor_alt or 0.0),
+                        "radius_m": float(radius_m),
+                        "seen_by": seen_by,
+                    }
+
+                    if signal_manager is not None:
+                        try:
+                            signal_manager.add_signal(signal)
+                        except Exception:
+                            pass
+                    if mqtt_sink is not None:
+                        try:
+                            mqtt_sink.publish_signal(signal)
+                        except Exception:
+                            pass
+
+                    try:
+                        cot = _build_cot(
+                            signal,
+                            float(offset_lat),
+                            float(offset_lon),
+                            float(sensor_alt or 0.0),
+                            stale_s,
+                            radius_m,
+                            seen_by,
+                        )
+                        logger.debug("FPV signal CoT XML: %s", cot.decode("utf-8", errors="ignore"))
+                        cot_messenger.send_cot(cot)
+                    except Exception as e:
+                        logger.debug("FPV signal CoT send failed: %s", e)
+                except Exception as e:
+                    logger.warning("FPV signal ingest error; skipping message: %s", e)
+        except Exception as e:
+            logger.exception("FATAL: FPV signal worker crashed with unexpected exception: %s", e)
+        finally:
+            socket.close(0)
+            context.term()
 
     thread = threading.Thread(target=worker, name="fpv-signal-worker", daemon=True)
     thread.start()

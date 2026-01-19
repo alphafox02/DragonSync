@@ -740,12 +740,20 @@ def zmq_to_cot(
 
                 # --- Updated logic for handling serial vs. CAA-only broadcasts ---
                 if 'id' in drone_info:
-                    if not drone_info['id'].startswith('drone-'):
-                        drone_info['id'] = f"drone-{drone_info['id']}"
-                        logger.debug(f"Ensured drone id with prefix: {drone_info['id']}")
+                    # Validate drone ID is not None or empty before string operations
+                    drone_id_value = drone_info['id']
+                    if not drone_id_value or not isinstance(drone_id_value, str):
+                        logger.warning(f"Invalid drone ID (None/empty/non-string), skipping message: {drone_info}")
+                        continue
+
+                    if not drone_id_value.startswith('drone-'):
+                        drone_id_value = f"drone-{drone_id_value}"
+                        logger.debug(f"Ensured drone id with prefix: {drone_id_value}")
                     else:
-                        logger.debug(f"Drone id already has prefix: {drone_info['id']}")
-                    drone_id = drone_info['id']
+                        logger.debug(f"Drone id already has prefix: {drone_id_value}")
+
+                    drone_info['id'] = drone_id_value
+                    drone_id = drone_id_value
                     serial_number = drone_id[len("drone-"):] if drone_id.startswith("drone-") else drone_id
 
                     logger.debug(f"Drone detailts for id: {drone_id} - {drone_info}")
