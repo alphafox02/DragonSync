@@ -84,6 +84,27 @@ class DroneManager:
             )
             logger.debug(f"Updated drone: {drone_id}: {drone_data}")
 
+    def _send_cot(self, cot_xml: bytes, context: str):
+        """Helper to send CoT XML with error handling."""
+        try:
+            if self.cot_messenger and cot_xml:
+                self.cot_messenger.send_cot(cot_xml)
+        except Exception as e:
+            logger.warning("%s: %s", context, e)
+
+    def _dispatch_to_sinks(self, drone_id: str, drone: Drone):
+        """Helper to dispatch drone updates to all configured sinks."""
+        for s in self.extra_sinks:
+            try:
+                if hasattr(s, "publish_drone"):
+                    s.publish_drone(drone)
+                if (drone.pilot_lat or drone.pilot_lon) and hasattr(s, "publish_pilot"):
+                    s.publish_pilot(drone_id, drone.pilot_lat, drone.pilot_lon, 0.0)
+                if (drone.home_lat or drone.home_lon) and hasattr(s, "publish_home"):
+                    s.publish_home(drone_id, drone.home_lat, drone.home_lon, 0.0)
+            except Exception as e:
+                logger.warning("Sink publish failed for %s (sink=%s): %s", drone_id, s, e)
+
     def send_updates(self):
         """Sends rate-limited CoT updates and dispatches the full Drone to sinks."""
         now = time.time()
@@ -106,38 +127,26 @@ class DroneManager:
             if (now - drone.last_sent_time) >= self.rate_limit:
                 stale_offset = self.inactivity_timeout - age
 
-                # 1) CoT main event
-                try:
-                    cot_xml = drone.to_cot_xml(stale_offset=stale_offset)
-                    if self.cot_messenger and cot_xml:
-                        self.cot_messenger.send_cot(cot_xml)
-                except Exception as e:
-                    logger.warning("CoT send failed for %s: %s", drone_id, e)
+                # Send drone CoT
+                self._send_cot(
+                    drone.to_cot_xml(stale_offset=stale_offset),
+                    f"CoT send failed for {drone_id}"
+                )
 
-                # 2) Sinks (MQTT/HA/Lattice/etc.)
-                for s in self.extra_sinks:
-                    try:
-                        if hasattr(s, "publish_drone"):
-                            s.publish_drone(drone)
-                        if (getattr(drone, "pilot_lat", 0.0) or getattr(drone, "pilot_lon", 0.0)) and hasattr(s, "publish_pilot"):
-                            s.publish_pilot(drone_id, drone.pilot_lat, drone.pilot_lon, 0.0)
-                        if (getattr(drone, "home_lat", 0.0) or getattr(drone, "home_lon", 0.0)) and hasattr(s, "publish_home"):
-                            s.publish_home(drone_id, drone.home_lat, drone.home_lon, 0.0)
-                    except Exception as e:
-                        logger.warning("Sink publish failed for %s (sink=%s): %s", drone_id, s, e)
+                # Dispatch to sinks
+                self._dispatch_to_sinks(drone_id, drone)
 
-                # 3) Pilot/Home CoT
-                try:
-                    if drone.pilot_lat != 0.0 or drone.pilot_lon != 0.0:
-                        pilot_xml = drone.to_pilot_cot_xml(stale_offset=stale_offset)
-                        if self.cot_messenger and pilot_xml:
-                            self.cot_messenger.send_cot(pilot_xml)
-                    if drone.home_lat != 0.0 or drone.home_lon != 0.0:
-                        home_xml = drone.to_home_cot_xml(stale_offset=stale_offset)
-                        if self.cot_messenger and home_xml:
-                            self.cot_messenger.send_cot(home_xml)
-                except Exception as e:
-                    logger.warning("Pilot/Home CoT send failed for %s: %s", drone_id, e)
+                # Send pilot/home CoT
+                if drone.pilot_lat != 0.0 or drone.pilot_lon != 0.0:
+                    self._send_cot(
+                        drone.to_pilot_cot_xml(stale_offset=stale_offset),
+                        f"Pilot CoT send failed for {drone_id}"
+                    )
+                if drone.home_lat != 0.0 or drone.home_lon != 0.0:
+                    self._send_cot(
+                        drone.to_home_cot_xml(stale_offset=stale_offset),
+                        f"Home CoT send failed for {drone_id}"
+                    )
 
                 drone.last_sent_lat = drone.lat
                 drone.last_sent_lon = drone.lon
