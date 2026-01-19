@@ -225,6 +225,59 @@ UA_TYPE_MAPPING = {
     15: 'Other type',
 }
 
+
+def _build_drone_update_kwargs(drone_info: Dict[str, Any], kit_id: str) -> Dict[str, Any]:
+    """
+    Extract common drone update parameters from parsed drone_info.
+    Works for both new Drone() construction and drone.update() calls.
+
+    Args:
+        drone_info: Parsed drone telemetry dictionary
+        kit_id: Current kit identifier for seen_by field
+
+    Returns:
+        Dictionary of kwargs suitable for Drone.__init__ or Drone.update
+    """
+    return {
+        'lat': drone_info.get('lat', 0.0),
+        'lon': drone_info.get('lon', 0.0),
+        'speed': drone_info.get('speed', 0.0),
+        'vspeed': drone_info.get('vspeed', 0.0),
+        'alt': drone_info.get('alt', 0.0),
+        'height': drone_info.get('height', 0.0),
+        'pilot_lat': drone_info.get('pilot_lat', 0.0),
+        'pilot_lon': drone_info.get('pilot_lon', 0.0),
+        'description': drone_info.get('description', ""),
+        'mac': drone_info.get('mac', ""),
+        'rssi': drone_info.get('rssi', 0),
+        'home_lat': drone_info.get('home_lat', 0.0),
+        'home_lon': drone_info.get('home_lon', 0.0),
+        'id_type': drone_info.get('id_type', ""),
+        'ua_type': drone_info.get('ua_type'),
+        'ua_type_name': drone_info.get('ua_type_name', ""),
+        'operator_id_type': drone_info.get('operator_id_type', ""),
+        'operator_id': drone_info.get('operator_id', ""),
+        'op_status': drone_info.get('op_status', ""),
+        'height_type': drone_info.get('height_type', ""),
+        'ew_dir': drone_info.get('ew_dir', ""),
+        'direction': drone_info.get('direction'),
+        'speed_multiplier': drone_info.get('speed_multiplier'),
+        'pressure_altitude': drone_info.get('pressure_altitude'),
+        'vertical_accuracy': drone_info.get('vertical_accuracy', ""),
+        'horizontal_accuracy': drone_info.get('horizontal_accuracy', ""),
+        'baro_accuracy': drone_info.get('baro_accuracy', ""),
+        'speed_accuracy': drone_info.get('speed_accuracy', ""),
+        'timestamp': drone_info.get('timestamp', ""),
+        'rid_timestamp': drone_info.get('rid_timestamp', ""),
+        'observed_at': time.time(),
+        'timestamp_accuracy': drone_info.get('timestamp_accuracy', ""),
+        'index': drone_info.get('index', 0),
+        'runtime': drone_info.get('runtime', 0),
+        'caa_id': drone_info.get('caa', ""),
+        'freq': drone_info.get('freq'),
+        'seen_by': kit_id
+    }
+
 # Setup logging
 def setup_logging(debug: bool):
     """Set up logging configuration."""
@@ -676,87 +729,10 @@ def zmq_to_cot(
                     if drone_id in drone_manager.drone_dict:
                         drone = drone_manager.drone_dict[drone_id]
                         _apply_rid_lookup(drone, serial_number)
-                        drone.update(
-                            lat=drone_info.get('lat', 0.0),
-                            lon=drone_info.get('lon', 0.0),
-                            speed=drone_info.get('speed', 0.0),
-                            vspeed=drone_info.get('vspeed', 0.0),
-                            alt=drone_info.get('alt', 0.0),
-                            height=drone_info.get('height', 0.0),
-                            pilot_lat=drone_info.get('pilot_lat', 0.0),
-                            pilot_lon=drone_info.get('pilot_lon', 0.0),
-                            description=drone_info.get('description', ""),
-                            mac=drone_info.get('mac', ""),
-                            rssi=drone_info.get('rssi', 0),
-                            home_lat=drone_info.get('home_lat', 0.0),
-                            home_lon=drone_info.get('home_lon', 0.0),
-                            id_type=drone_info.get('id_type', ""),
-                            ua_type=drone_info.get('ua_type'),
-                            ua_type_name=drone_info.get('ua_type_name', ""),
-                            operator_id_type=drone_info.get('operator_id_type', ""),
-                            operator_id=drone_info.get('operator_id', ""),
-                            op_status=drone_info.get('op_status', ""),
-                            height_type=drone_info.get('height_type', ""),
-                            ew_dir=drone_info.get('ew_dir', ""),
-                            direction=drone_info.get('direction'),
-                            speed_multiplier=drone_info.get('speed_multiplier'),
-                            pressure_altitude=drone_info.get('pressure_altitude'),
-                            vertical_accuracy=drone_info.get('vertical_accuracy', ""),
-                            horizontal_accuracy=drone_info.get('horizontal_accuracy', ""),
-                            baro_accuracy=drone_info.get('baro_accuracy', ""),
-                            speed_accuracy=drone_info.get('speed_accuracy', ""),
-                            timestamp=drone_info.get('timestamp', ""),
-                            rid_timestamp=drone_info.get('rid_timestamp', ""),
-                            observed_at=time.time(),
-                            timestamp_accuracy=drone_info.get('timestamp_accuracy', ""),
-                            index=drone_info.get('index', 0),
-                            runtime=drone_info.get('runtime', 0),
-                            caa_id=drone_info.get('caa', ""),
-                            freq=drone_info.get('freq'),
-                            seen_by=KIT_ID
-                        )
+                        drone.update(**_build_drone_update_kwargs(drone_info, KIT_ID))
                         logger.debug(f"Updated drone: {drone_id}")
                     else:
-                        drone = Drone(
-                            id=drone_info['id'],
-                            lat=drone_info.get('lat', 0.0),
-                            lon=drone_info.get('lon', 0.0),
-                            speed=drone_info.get('speed', 0.0),
-                            vspeed=drone_info.get('vspeed', 0.0),
-                            alt=drone_info.get('alt', 0.0),
-                            height=drone_info.get('height', 0.0),
-                            pilot_lat=drone_info.get('pilot_lat', 0.0),
-                            pilot_lon=drone_info.get('pilot_lon', 0.0),
-                            description=drone_info.get('description', ""),
-                            mac=drone_info.get('mac', ""),
-                            rssi=drone_info.get('rssi', 0),
-                            home_lat=drone_info.get('home_lat', 0.0),
-                            home_lon=drone_info.get('home_lon', 0.0),
-                            id_type=drone_info.get('id_type', ""),
-                            ua_type=drone_info.get('ua_type'),
-                            ua_type_name=drone_info.get('ua_type_name', ""),
-                            operator_id_type=drone_info.get('operator_id_type', ""),
-                            operator_id=drone_info.get('operator_id', ""),
-                            op_status=drone_info.get('op_status', ""),
-                            height_type=drone_info.get('height_type', ""),
-                            ew_dir=drone_info.get('ew_dir', ""),
-                            direction=drone_info.get('direction'),
-                            speed_multiplier=drone_info.get('speed_multiplier'),
-                            pressure_altitude=drone_info.get('pressure_altitude'),
-                            vertical_accuracy=drone_info.get('vertical_accuracy', ""),
-                            horizontal_accuracy=drone_info.get('horizontal_accuracy', ""),
-                            baro_accuracy=drone_info.get('baro_accuracy', ""),
-                            speed_accuracy=drone_info.get('speed_accuracy', ""),
-                            timestamp=drone_info.get('timestamp', ""),
-                            rid_timestamp=drone_info.get('rid_timestamp', ""),
-                            observed_at=time.time(),
-                            timestamp_accuracy=drone_info.get('timestamp_accuracy', ""),
-                            index=drone_info.get('index', 0),
-                            runtime=drone_info.get('runtime', 0),
-                            caa_id=drone_info.get('caa', ""),
-                            freq=drone_info.get('freq'),
-                            seen_by=KIT_ID
-                        )
+                        drone = Drone(id=drone_info['id'], **_build_drone_update_kwargs(drone_info, KIT_ID))
                         _apply_rid_lookup(drone, serial_number)
                         drone_manager.update_or_add_drone(drone_id, drone)
                         logger.debug(f"Added new drone: {drone_id}")
@@ -766,45 +742,7 @@ def zmq_to_cot(
                         updated = False
                         for d in drone_manager.drone_dict.values():
                             if d.mac == drone_info['mac']:
-                                d.update(
-                                    lat=drone_info.get('lat', 0.0),
-                                    lon=drone_info.get('lon', 0.0),
-                                    speed=drone_info.get('speed', 0.0),
-                                    vspeed=drone_info.get('vspeed', 0.0),
-                                    alt=drone_info.get('alt', 0.0),
-                                    height=drone_info.get('height', 0.0),
-                                    pilot_lat=drone_info.get('pilot_lat', 0.0),
-                                    pilot_lon=drone_info.get('pilot_lon', 0.0),
-                                    description=drone_info.get('description', ""),
-                                    mac=drone_info.get('mac', ""),
-                                    rssi=drone_info.get('rssi', 0),
-                                    home_lat=drone_info.get('home_lat', 0.0),
-                                    home_lon=drone_info.get('home_lon', 0.0),
-                                    id_type=drone_info.get('id_type', ""),
-                                    ua_type=drone_info.get('ua_type'),
-                                    ua_type_name=drone_info.get('ua_type_name', ""),
-                                    operator_id_type=drone_info.get('operator_id_type', ""),
-                                    operator_id=drone_info.get('operator_id', ""),
-                                    op_status=drone_info.get('op_status', ""),
-                                    height_type=drone_info.get('height_type', ""),
-                                    ew_dir=drone_info.get('ew_dir', ""),
-                                    direction=drone_info.get('direction'),
-                                    speed_multiplier=drone_info.get('speed_multiplier'),
-                                    pressure_altitude=drone_info.get('pressure_altitude'),
-                                    vertical_accuracy=drone_info.get('vertical_accuracy', ""),
-                                    horizontal_accuracy=drone_info.get('horizontal_accuracy', ""),
-                                    baro_accuracy=drone_info.get('baro_accuracy', ""),
-                                    speed_accuracy=drone_info.get('speed_accuracy', ""),
-                                    timestamp=drone_info.get('timestamp', ""),
-                                    rid_timestamp=drone_info.get('rid_timestamp', ""),
-                                    observed_at=time.time(),
-                                    timestamp_accuracy=drone_info.get('timestamp_accuracy', ""),
-                                    index=drone_info.get('index', 0),
-                                    runtime=drone_info.get('runtime', 0),
-                                    caa_id=drone_info.get('caa', ""),
-                                    freq=drone_info.get('freq'),
-                                    seen_by=KIT_ID
-                                )
+                                d.update(**_build_drone_update_kwargs(drone_info, KIT_ID))
                                 logger.debug(f"Updated existing drone with CAA info for MAC: {drone_info['mac']}")
                                 updated = True
                                 break
