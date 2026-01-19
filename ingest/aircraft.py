@@ -63,6 +63,8 @@ class ADSBTracker:
           - hex, flight, lat, lon, alt_geom, alt_baro, gs (kt), track (deg)
           - squawk, category, reg, onground / OnGround, nac_p / NACp, nac_v / NACv
         """
+        from utils.cot_builder import build_adsb_cot
+
         lat = craft.get("lat")
         lon = craft.get("lon")
         if lat is None or lon is None:
@@ -72,132 +74,7 @@ class ADSBTracker:
         if not uid:
             return None
 
-        # Prefer geometric altitude, fall back to barometric, else 0
-        alt = craft.get("alt_geom")
-        if alt is None:
-            alt = craft.get("alt_baro", 0)
-
-        # Identity-ish stuff
-        flight = (craft.get("flight") or "").strip()
-        hex_id = (craft.get("hex") or "").strip().upper()
-        callsign = uid
-        squawk = craft.get("squawk")
-        # readsb can add reg if using db-file / db-file-lt, but it's optional
-        reg = craft.get("reg") or craft.get("r")
-        category = craft.get("category") or craft.get("cat")
-
-        # Kinematics
-        gs = float(craft.get("gs") or 0.0)        # knots
-        track = float(craft.get("track") or 0.0)  # degrees
-
-        # Ground / air state
-        # readsb: "onground": 1/0; other sources might use "OnGround": True/False
-        on_ground = bool(
-            craft.get("onground") or craft.get("OnGround") or False
-        )
-
-        # Position quality (NACp / NACv -> CE / LE), if present
-        nac_p = craft.get("NACp", craft.get("nac_p"))
-        nac_v = craft.get("NACv", craft.get("nac_v", nac_p))
-
-        # Defaults (roughly what you had before)
-        ce_val = 35.0
-        le_val = 999999.0
-
-        if nac_p is not None:
-            try:
-                nac_p_f = float(nac_p)
-                nac_v_f = float(nac_v) if nac_v is not None else nac_p_f
-                # Inspired by common ADS-B handling: slightly different
-                # constant when on the ground vs airborne.
-                ground_const = 51.56 if on_ground else 56.57
-                ce_val = nac_p_f + ground_const
-                le_val = nac_v_f + 12.5
-            except (TypeError, ValueError):
-                # fall back to defaults if parsing fails
-                ce_val = 35.0
-                le_val = 999999.0
-
-        now = datetime.datetime.utcnow()
-        t = now.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-        stale = (now + datetime.timedelta(seconds=self.stale)).strftime(
-            "%Y-%m-%dT%H:%M:%S.%fZ"
-        )
-
-        # Simple/default air track for now; we can refine later.
-        cot_type = "a-f-A"
-
-        event = etree.Element(
-            "event",
-            version="2.0",
-            uid=uid,
-            type=cot_type,
-            time=t,
-            start=t,
-            stale=stale,
-            how="m-g",
-        )
-
-        etree.SubElement(
-            event,
-            "point",
-            lat=str(lat),
-            lon=str(lon),
-            hae=str(float(alt)),
-            ce=str(float(ce_val)),
-            le=str(float(le_val)),
-        )
-
-        detail = etree.SubElement(event, "detail")
-        etree.SubElement(detail, "contact", callsign=callsign)
-
-        # Include <track> so TAK draws heading
-        track_el = etree.SubElement(
-            detail,
-            "track",
-            course=str(track),
-            speed=str(gs),
-        )
-
-        # If we know it's on the ground, we can hint at that via slope.
-        if on_ground:
-            track_el.set("slope", "0")
-
-        display_id = flight or hex_id
-        # Build richer remarks but keep it compact
-        remark_parts = [
-            "ADS-B",
-            f"hex={hex_id}" if hex_id else None,
-            f"flight={display_id}" if display_id else None,
-            f"alt={alt}ft",
-            f"gs={gs}kt",
-            f"track={track}",
-        ]
-
-        if squawk:
-            remark_parts.append(f"squawk={squawk}")
-        if reg:
-            remark_parts.append(f"reg={reg}")
-        if category:
-            remark_parts.append(f"cat={category}")
-        if on_ground:
-            remark_parts.append("onground=1")
-
-        # You can flip this to "src=readsb" if you want to be explicit
-        remark_parts.append("src=adsb")
-        if seen_by:
-            remark_parts.append(f"SeenBy: {seen_by}")
-
-        remarks = " ".join(p for p in remark_parts if p)
-        etree.SubElement(detail, "remarks").text = xml.sax.saxutils.escape(remarks)
-
-        xml_bytes = etree.tostring(
-            event,
-            pretty_print=False,
-            xml_declaration=True,
-            encoding="UTF-8",
-        )
-        return xml_bytes
+        return build_adsb_cot(craft, uid, seen_by, self.stale)
 
     def craft_to_dict(
         self,
@@ -281,6 +158,7 @@ def adsb_worker_loop(
     aircraft_cache: Optional[dict] = None,
     seen_by: Optional[Union[str, Callable[[], Optional[str]]]] = None,
     cache_ttl: Optional[float] = 120.0,
+    extra_sinks: Optional[List] = None,
 ):
     """
     Background worker:
@@ -357,6 +235,18 @@ def adsb_worker_loop(
                     cot_messenger.send_cot(cot)
                 except Exception as e:
                     logger.exception(f"ADS-B: failed to send CoT for {uid}: {e}")
+
+            # Publish to extra sinks (e.g., MQTT)
+            if extra_sinks:
+                craft_with_seen_by = dict(craft)
+                craft_with_seen_by["seen_by"] = current_seen_by
+                for sink in extra_sinks:
+                    try:
+                        if hasattr(sink, "publish_aircraft"):
+                            sink.publish_aircraft(craft_with_seen_by)
+                    except Exception as e:
+                        logger.warning(f"ADS-B: sink publish_aircraft failed for {uid}: {e}")
+
             # optional API cache
             if aircraft_cache is not None:
                 try:

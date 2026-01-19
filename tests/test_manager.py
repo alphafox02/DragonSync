@@ -16,8 +16,7 @@ import time
 from unittest.mock import Mock, MagicMock, call
 from collections import deque
 
-from drone import Drone
-from manager import DroneManager
+from core import Drone, DroneManager
 
 
 @pytest.fixture
@@ -519,3 +518,117 @@ def test_manager_update_or_add_with_frequency(manager):
 
     # Frequency should be updated
     assert manager.drone_dict["drone-DJI001"].freq == 5805000000.0
+
+
+def test_manager_mac_index_lookup(manager):
+    """Test that MAC index allows O(1) drone lookup by MAC address"""
+    drone = Drone(
+        id="drone-TEST001",
+        lat=39.7392,
+        lon=-104.9903,
+        speed=10.0,
+        vspeed=1.5,
+        alt=1655.5,
+        height=50.0,
+        pilot_lat=39.7400,
+        pilot_lon=-104.9900,
+        description="Test",
+        mac="AA:BB:CC:DD:EE:FF",
+        rssi=-65
+    )
+
+    manager.update_or_add_drone("drone-TEST001", drone)
+
+    # MAC index should be populated
+    assert "AA:BB:CC:DD:EE:FF" in manager.mac_to_id
+    assert manager.mac_to_id["AA:BB:CC:DD:EE:FF"] == "drone-TEST001"
+
+    # get_drone_by_mac should return the drone
+    found_drone = manager.get_drone_by_mac("AA:BB:CC:DD:EE:FF")
+    assert found_drone is not None
+    assert found_drone.id == "drone-TEST001"
+    assert found_drone.mac == "AA:BB:CC:DD:EE:FF"
+
+    # Non-existent MAC should return None
+    assert manager.get_drone_by_mac("FF:FF:FF:FF:FF:FF") is None
+
+
+def test_manager_mac_index_cleanup_on_removal(manager):
+    """Test that MAC index is cleaned up when drone is removed"""
+    drone = Drone(
+        id="drone-TEST001",
+        lat=39.7392,
+        lon=-104.9903,
+        speed=10.0,
+        vspeed=1.5,
+        alt=1655.5,
+        height=50.0,
+        pilot_lat=39.7400,
+        pilot_lon=-104.9900,
+        description="Test",
+        mac="AA:BB:CC:DD:EE:FF",
+        rssi=-65
+    )
+
+    manager.update_or_add_drone("drone-TEST001", drone)
+
+    # MAC should be in index
+    assert "AA:BB:CC:DD:EE:FF" in manager.mac_to_id
+
+    # Make drone inactive and trigger cleanup
+    drone.last_update_time = time.time() - 120.0
+    manager.send_updates()
+
+    # MAC should be removed from index
+    assert "AA:BB:CC:DD:EE:FF" not in manager.mac_to_id
+    assert manager.get_drone_by_mac("AA:BB:CC:DD:EE:FF") is None
+
+
+def test_manager_mac_index_fifo_eviction(manager):
+    """Test that MAC index is maintained during FIFO eviction"""
+    # Add 10 drones (manager max is 10)
+    for i in range(10):
+        drone = Drone(
+            id=f"drone-TEST{i:03d}",
+            lat=39.7392,
+            lon=-104.9903,
+            speed=10.0,
+            vspeed=1.5,
+            alt=1655.5,
+            height=50.0,
+            pilot_lat=39.7400,
+            pilot_lon=-104.9900,
+            description=f"Drone {i}",
+            mac=f"AA:BB:CC:DD:EE:{i:02X}",
+            rssi=-65
+        )
+        manager.update_or_add_drone(f"drone-TEST{i:03d}", drone)
+
+    # All MACs should be in index
+    assert len(manager.mac_to_id) == 10
+
+    # Add 11th drone to trigger eviction
+    drone11 = Drone(
+        id="drone-TEST010",
+        lat=39.7392,
+        lon=-104.9903,
+        speed=10.0,
+        vspeed=1.5,
+        alt=1655.5,
+        height=50.0,
+        pilot_lat=39.7400,
+        pilot_lon=-104.9900,
+        description="Drone 10",
+        mac="AA:BB:CC:DD:EE:0A",
+        rssi=-65
+    )
+    manager.update_or_add_drone("drone-TEST010", drone11)
+
+    # Still should have 10 MACs
+    assert len(manager.mac_to_id) == 10
+
+    # First drone's MAC should be removed
+    assert "AA:BB:CC:DD:EE:00" not in manager.mac_to_id
+
+    # New drone's MAC should be present
+    assert "AA:BB:CC:DD:EE:0A" in manager.mac_to_id

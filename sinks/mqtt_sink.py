@@ -74,6 +74,9 @@ class MqttSink:
         # Signals (optional)
         signals_enabled: bool = False,
         signals_topic: str = "wardragon/signals",
+        # Aircraft (optional)
+        aircraft_enabled: bool = False,
+        aircraft_topic: str = "wardragon/aircraft",
         # HA signal tracker (optional)
         ha_signal_tracker: bool = False,
         ha_signal_base: str = "wardragon_signal",
@@ -96,6 +99,9 @@ class MqttSink:
         self.signals_enabled = bool(signals_enabled)
         self.signals_topic = signals_topic.strip().strip("/") if signals_topic else ""
         self._signal_state_topic = ""
+
+        self.aircraft_enabled = bool(aircraft_enabled)
+        self.aircraft_topic = aircraft_topic.strip().strip("/") if aircraft_topic else ""
 
         self.ha_enabled = bool(ha_enabled)
         self.ha_prefix = ha_prefix.strip().strip("/")
@@ -402,6 +408,23 @@ class MqttSink:
         except Exception as e:
             _log.warning("Signal publish failed: %s", e)
 
+    def publish_aircraft(self, aircraft: Dict[str, Any]) -> None:
+        """
+        Publish ADS-B aircraft to MQTT aggregate topic only.
+        No per-aircraft topics or HA discovery (would overwhelm system with 100+ aircraft).
+        """
+        if not self.aircraft_enabled or not self.aircraft_topic:
+            return
+        try:
+            state = self._aircraft_to_state(aircraft)
+            payload = json.dumps(state, default=_json_default)
+            info = self.client.publish(
+                self.aircraft_topic, payload, qos=self.qos, retain=False  # Don't retain aircraft
+            )
+            self._warn_if_publish_failed(info)
+        except Exception as e:
+            _log.warning("Aircraft publish failed: %s", e)
+
     def _warn_if_publish_failed(self, info) -> None:
         try:
             rc = getattr(info, "rc", None)
@@ -438,6 +461,41 @@ class MqttSink:
             "radius_m": _f(sig.get("radius_m", 0.0)),
             "seen_by": sig.get("seen_by"),
             "observed_at": sig.get("observed_at", None),
+        }
+        return state
+
+    def _aircraft_to_state(self, aircraft: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert ADS-B aircraft dict to MQTT state payload."""
+        lat = _f(aircraft.get("lat", 0.0))
+        lon = _f(aircraft.get("lon", 0.0))
+
+        # Get altitude (prefer geometric, fallback to barometric)
+        alt = aircraft.get("alt_geom")
+        if alt is None:
+            alt = aircraft.get("alt_baro", 0)
+
+        state = {
+            "icao": aircraft.get("hex", "").strip().upper(),
+            "callsign": (aircraft.get("flight") or "").strip(),
+            "registration": aircraft.get("reg", ""),
+            "lat": lat,
+            "lon": lon,
+            "latitude": lat,
+            "longitude": lon,
+            "alt": _f(alt),
+            "altitude_ft": _f(alt),
+            "speed": _f(aircraft.get("gs", 0.0)),  # Ground speed in knots
+            "speed_kt": _f(aircraft.get("gs", 0.0)),
+            "track": _f(aircraft.get("track", 0.0)),  # True track
+            "heading": _f(aircraft.get("track", 0.0)),
+            "vertical_rate": _f_or_none(aircraft.get("baro_rate")),
+            "squawk": aircraft.get("squawk", ""),
+            "category": aircraft.get("category", ""),
+            "on_ground": bool(aircraft.get("onground") or aircraft.get("OnGround", False)),
+            "nac_p": _f_or_none(aircraft.get("nac_p") or aircraft.get("NACp")),
+            "nac_v": _f_or_none(aircraft.get("nac_v") or aircraft.get("NACv")),
+            "seen_by": aircraft.get("seen_by"),
+            "track_type": "aircraft",
         }
         return state
 

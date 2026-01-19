@@ -94,68 +94,8 @@ class SystemStatus:
         
     def to_cot_xml(self) -> bytes:
         """Converts the system status data to a CoT XML message, embedding provided speed & track."""
-        current_time = datetime.datetime.utcnow()
-        stale_time = current_time + datetime.timedelta(minutes=10)
+        from utils.cot_builder import build_system_status_cot
 
-        event = etree.Element(
-            'event',
-            version='2.0',
-            uid=self.id,
-            type='a-f-G-E-S',
-            time=current_time.strftime('%Y-%m-%dT%H:%M:%S.%fZ'),
-            start=current_time.strftime('%Y-%m-%dT%H:%M:%S.%fZ'),
-            stale=stale_time.strftime('%Y-%m-%dT%H:%M:%S.%fZ'),
-            how='m-g'
-        )
-
-        etree.SubElement(
-            event,
-            'point',
-            lat=str(self.lat),
-            lon=str(self.lon),
-            hae=str(self.alt),
-            ce='35.0',
-            le='999999'
-        )
-
-        detail = etree.SubElement(event, 'detail')
-        etree.SubElement(detail, 'contact', endpoint='', phone='', callsign=self.id)
-        etree.SubElement(detail, 'precisionlocation', geopointsrc='gps', altsrc='gps')
-
-        remarks_text = (
-            f"CPU Usage: {self.cpu_usage}%, "
-            f"Memory Total: {self.memory_total:.2f} MB, Memory Available: {self.memory_available:.2f} MB, "
-            f"Disk Total: {self.disk_total:.2f} MB, Disk Used: {self.disk_used:.2f} MB, "
-            f"Temperature: {self.temperature}°C, "
-            f"Uptime: {self.uptime} seconds, "
-            f"Pluto Temp: {self.pluto_temp}°C, "
-            f"Zynq Temp: {self.zynq_temp}°C"
-        )
-        if self.time_source:
-            remarks_text += f"; TimeSource: {self.time_source}"
-        if self.gps_fix:
-            remarks_text += "; GPS Fix: true"
-        if self.gpsd_time_utc:
-            remarks_text += f"; GPSD UTC: {self.gpsd_time_utc}"
-        etree.SubElement(detail, 'remarks').text = xml.sax.saxutils.escape(remarks_text)
-        etree.SubElement(detail, 'color', argb='-256')
-
-        # embed GPS-provided track & speed
-        etree.SubElement(
-            detail,
-            'track',
-            course=f"{self.track:.1f}",
-            speed=f"{self.speed:.2f}"
-        )
-
-        cot_xml_bytes = etree.tostring(
-            event,
-            pretty_print=True,
-            xml_declaration=True,
-            encoding='UTF-8'
-        )
-
-        # Debug logging
+        cot_xml_bytes = build_system_status_cot(self, stale_seconds=600.0)
         logger.debug("SystemStatus CoT XML for '%s':\n%s", self.id, cot_xml_bytes.decode('utf-8'))
-
         return cot_xml_bytes

@@ -288,98 +288,15 @@ class Drone:
 
     def to_cot_xml(self, stale_offset: Optional[float] = None) -> bytes:
         """Converts the drone's telemetry data to a CoT XML message, including a <track>."""
-        now = datetime.datetime.utcnow()
-        if stale_offset is not None:
-            stale = now + datetime.timedelta(seconds=stale_offset)
-        else:
-            stale = now + datetime.timedelta(minutes=10)
+        from utils.cot_builder import build_drone_cot
 
-        # pick CoT type by UA index, fallback to rotary‑wing VTOL
-        cot_type = UA_COT_TYPE_MAP.get(self.ua_type, 'a-u-A-M-H-R')
+        if stale_offset is None:
+            stale_offset = 600.0  # 10 minutes default
 
-        event = etree.Element(
-            'event',
-            version='2.0',
-            uid=self.id,
-            type=cot_type,
-            time=now.strftime('%Y-%m-%dT%H:%M:%S.%fZ'),
-            start=now.strftime('%Y-%m-%dT%H:%M:%S.%fZ'),
-            stale=stale.strftime('%Y-%m-%dT%H:%M:%S.%fZ'),
-            how='m-g'
-        )
+        # Add cot_type attribute for the builder (pick CoT type by UA index)
+        self.cot_type = UA_COT_TYPE_MAP.get(self.ua_type, 'a-u-A-M-H-R')
 
-        etree.SubElement(
-            event,
-            'point',
-            lat=str(self.lat),
-            lon=str(self.lon),
-            hae=str(self.alt),
-            ce='35.0',
-            le='999999'
-        )
-
-        detail = etree.SubElement(event, 'detail')
-        etree.SubElement(detail, 'contact', callsign=self.id)
-        etree.SubElement(detail, 'precisionlocation', geopointsrc='gps', altsrc='gps')
-
-        # include <track> so ATAK will draw a track
-        etree.SubElement(
-            detail,
-            'track',
-            course=str(self.direction or 0.0),
-            speed=str(self.speed or 0.0)
-        )
-
-        remarks = (
-            f"MAC: {self.mac}, RSSI: {self.rssi}dBm; "
-            f"ID Type: {self.id_type}; UA Type: {self.ua_type_name} "
-            f"({self.ua_type}); "
-            f"Operator ID: [{self.operator_id_type}: {self.operator_id}]; "
-            f"Speed: {self.speed} m/s; Vert Speed: {self.vspeed} m/s; "
-            f"Altitude: {self.alt} m; AGL: {self.height} m; "
-            f"Course: {self.direction}°; "
-            f"Index: {self.index}; Runtime: {self.runtime}s"
-        )
-
-        # Always try to add frequency (DJI usually supplies it)
-        fmhz = self._fmt_freq_mhz(self.freq)
-        if fmhz is not None:
-            remarks += f"; Freq: ~{fmhz} MHz"
-
-        # Alert reason
-        if self.id == "drone-alert":
-            remarks += "; Alert: Unknown DJI OcuSync format (Encrypted/Partial)"
-
-        # FAA RID lookup enrichment (if available)
-        if self.rid_make or self.rid_model:
-            rid_label = f"{self.rid_make or ''} {self.rid_model or ''}".strip()
-            if rid_label:
-                remarks += f"; RID: {rid_label}"
-        if self.rid_source:
-            remarks += f"; RID Source: {self.rid_source}"
-        if self.seen_by:
-            remarks += f"; SeenBy: {self.seen_by}"
-        if self.observed_at:
-            obs_dt = datetime.datetime.utcfromtimestamp(self.observed_at)
-            remarks += f"; ObservedAt: {obs_dt.isoformat()}Z"
-        if self.rid_timestamp:
-            remarks += f"; RID_TS: {self.rid_timestamp}"
-
-        etree.SubElement(detail, 'remarks').text = xml.sax.saxutils.escape(remarks)
-        etree.SubElement(detail, 'color', argb='-256')
-        # dropped <usericon> so icon derives from event type
-
-        # Structured RID block for ATAK details/raw views
-        rid = etree.SubElement(detail, 'rid')
-        if self.rid_make:
-            rid.set('make', self.rid_make)
-        if self.rid_model:
-            rid.set('model', self.rid_model)
-        if self.rid_source:
-            rid.set('source', self.rid_source)
-
-        xml_bytes = etree.tostring(event, pretty_print=True,
-                                   xml_declaration=True, encoding='UTF-8')
+        xml_bytes = build_drone_cot(self, stale_offset)
         logger.debug("CoT XML for drone '%s':\n%s", self.id, xml_bytes.decode('utf-8'))
         return xml_bytes
 
@@ -441,124 +358,28 @@ class Drone:
         """Generates a CoT XML message for the pilot location.
 
         Returns empty bytes when UID is 'drone-alert' (pilot not decoded from OcuSync)."""
-        # --- NEW: suppress when alert (no pilot from OcuSync) ---
-        if self.id == "drone-alert":
-            logger.debug("Skipping pilot CoT for 'drone-alert' (no pilot decoded).")
-            return b""
+        from utils.cot_builder import build_pilot_cot
 
-        now = datetime.datetime.utcnow()
-        if stale_offset is not None:
-            stale = now + datetime.timedelta(seconds=stale_offset)
-        else:
-            stale = now + datetime.timedelta(minutes=10)
+        if stale_offset is None:
+            stale_offset = 600.0  # 10 minutes default
 
-        base_id = self.id
-        if base_id.startswith("drone-"):
-            base_id = base_id[len("drone-"):]
-        uid = f"pilot-{base_id}"
-
-        event = etree.Element(
-            'event',
-            version='2.0',
-            uid=uid,
-            type='b-m-p-s-m',
-            time=now.strftime('%Y-%m-%dT%H:%M:%S.%fZ'),
-            start=now.strftime('%Y-%m-%dT%H:%M:%S.%fZ'),
-            stale=stale.strftime('%Y-%m-%dT%H:%M:%S.%fZ'),
-            how='m-g'
-        )
-        etree.SubElement(
-            event,
-            'point',
-            lat=str(self.pilot_lat),
-            lon=str(self.pilot_lon),
-            hae=str(self.alt),
-            ce='35.0',
-            le='999999'
-        )
-
-        detail = etree.SubElement(event, 'detail')
-        callsign = f"pilot-{base_id}"
-        etree.SubElement(detail, 'contact', callsign=callsign)
-        etree.SubElement(detail, 'precisionlocation', geopointsrc='gps', altsrc='gps')
-        etree.SubElement(
-            detail,
-            'usericon',
-            iconsetpath='com.atakmap.android.maps.public/Civilian/Person.png'
-        )
-        pilot_remarks = f"Pilot location for drone {self.id}"
-        if self.seen_by:
-            pilot_remarks += f"; SeenBy: {self.seen_by}"
-        if self.observed_at:
-            obs_dt = datetime.datetime.utcfromtimestamp(self.observed_at)
-            pilot_remarks += f"; ObservedAt: {obs_dt.isoformat()}Z"
-        etree.SubElement(detail, 'remarks').text = xml.sax.saxutils.escape(pilot_remarks)
-
-        xml_bytes = etree.tostring(event, pretty_print=True,
-                                   xml_declaration=True, encoding='UTF-8')
-        logger.debug("CoT XML for pilot '%s':\n%s", self.id, xml_bytes.decode('utf-8'))
+        xml_bytes = build_pilot_cot(self, stale_offset)
+        if xml_bytes:
+            logger.debug("CoT XML for pilot '%s':\n%s", self.id, xml_bytes.decode('utf-8'))
         return xml_bytes
 
     def to_home_cot_xml(self, stale_offset: Optional[float] = None) -> bytes:
         """Generates a CoT XML message for the home location.
 
         Returns empty bytes when UID is 'drone-alert' (home not decoded from OcuSync)."""
-        # --- NEW: suppress when alert (no home from OcuSync) ---
-        if self.id == "drone-alert":
-            logger.debug("Skipping home CoT for 'drone-alert' (no home decoded).")
-            return b""
+        from utils.cot_builder import build_home_cot
 
-        now = datetime.datetime.utcnow()
-        if stale_offset is not None:
-            stale = now + datetime.timedelta(seconds=stale_offset)
-        else:
-            stale = now + datetime.timedelta(minutes=10)
+        if stale_offset is None:
+            stale_offset = 600.0  # 10 minutes default
 
-        base_id = self.id
-        if base_id.startswith("drone-"):
-            base_id = base_id[len("drone-"):]
-        uid = f"home-{base_id}"
-
-        event = etree.Element(
-            'event',
-            version='2.0',
-            uid=uid,
-            type='b-m-p-s-m',
-            time=now.strftime('%Y-%m-%dT%H:%M:%S.%fZ'),
-            start=now.strftime('%Y-%m-%dT%H:%M:%S.%fZ'),
-            stale=stale.strftime('%Y-%m-%dT%H:%M:%S.%fZ'),
-            how='m-g'
-        )
-        etree.SubElement(
-            event,
-            'point',
-            lat=str(self.home_lat),
-            lon=str(self.home_lon),
-            hae=str(self.alt),
-            ce='35.0',
-            le='999999'
-        )
-
-        detail = etree.SubElement(event, 'detail')
-        callsign = f"home-{base_id}"
-        etree.SubElement(detail, 'contact', callsign=callsign)
-        etree.SubElement(detail, 'precisionlocation', geopointsrc='gps', altsrc='gps')
-        etree.SubElement(
-            detail,
-            'usericon',
-            iconsetpath='com.atakmap.android.maps.public/Civilian/House.png'
-        )
-        home_remarks = f"Home location for drone {self.id}"
-        if self.seen_by:
-            home_remarks += f"; SeenBy: {self.seen_by}"
-        if self.observed_at:
-            obs_dt = datetime.datetime.utcfromtimestamp(self.observed_at)
-            home_remarks += f"; ObservedAt: {obs_dt.isoformat()}Z"
-        etree.SubElement(detail, 'remarks').text = xml.sax.saxutils.escape(home_remarks)
-
-        xml_bytes = etree.tostring(event, pretty_print=True,
-                                   xml_declaration=True, encoding='UTF-8')
-        logger.debug("CoT XML for home '%s':\n%s", self.id, xml_bytes.decode('utf-8'))
+        xml_bytes = build_home_cot(self, stale_offset)
+        if xml_bytes:
+            logger.debug("CoT XML for home '%s':\n%s", self.id, xml_bytes.decode('utf-8'))
         return xml_bytes
 
     def apply_rid_lookup_result(self, lookup: dict) -> None:

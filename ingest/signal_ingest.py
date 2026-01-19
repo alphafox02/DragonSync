@@ -105,52 +105,8 @@ def _build_cot(
     radius_m: float,
     seen_by: Optional[str],
 ) -> bytes:
-    now = _now_utc()
-    t = now.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-    stale = (now + datetime.timedelta(seconds=stale_s)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-
-    uid = alert["uid"]
-    signal_type = alert.get("signal_type") or "fpv"
-    callsign = alert.get("callsign") or f"{signal_type.upper()} Signal"
-
-    remarks_parts = [f"signal={signal_type}"]
-    if alert.get("source") is not None:
-        remarks_parts.append(f"source={alert.get('source')}")
-    if alert.get("center_hz") is not None:
-        remarks_parts.append(f"center_hz={alert.get('center_hz')}")
-    if alert.get("bandwidth_hz") is not None:
-        remarks_parts.append(f"bandwidth_hz={alert.get('bandwidth_hz')}")
-    if alert.get("pal_conf") is not None:
-        remarks_parts.append(f"pal={alert.get('pal_conf')}")
-    if alert.get("ntsc_conf") is not None:
-        remarks_parts.append(f"ntsc={alert.get('ntsc_conf')}")
-    if seen_by:
-        remarks_parts.append(f"SeenBy: {seen_by}")
-    remarks = " ".join(str(p) for p in remarks_parts if p)
-
-    event = ET.Element(
-        "event",
-        version="2.0",
-        uid=uid,
-        type="b-m-p-s-s",
-        time=t,
-        start=t,
-        stale=stale,
-        how="m-g",
-    )
-    ET.SubElement(
-        event,
-        "point",
-        lat=str(lat),
-        lon=str(lon),
-        hae=str(float(alt or 0.0)),
-        ce=str(float(radius_m)),
-        le=str(999999.0),
-    )
-    detail = ET.SubElement(event, "detail")
-    ET.SubElement(detail, "contact", callsign=str(callsign))
-    ET.SubElement(detail, "remarks").text = remarks
-    return ET.tostring(event, encoding="UTF-8", xml_declaration=True)
+    from utils.cot_builder import build_signal_cot
+    return build_signal_cot(alert, lat, lon, alt, stale_s, radius_m, seen_by)
 
 
 def start_signal_worker(

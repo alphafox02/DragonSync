@@ -21,8 +21,8 @@ import logging
 import time
 import threading
 from typing import Optional, List, Tuple
-from tak_client import TAKClient
-from tak_udp_client import TAKUDPClient
+from .tak_client import TAKClient
+from .tak_udp_client import TAKUDPClient
 
 logger = logging.getLogger(__name__)
 

@@ -14,9 +14,7 @@ from unittest.mock import Mock, patch
 # Import the main module to verify refactoring didn't break anything
 import dragonsync
 from dragonsync import _build_drone_update_kwargs, UA_TYPE_MAPPING
-from telemetry_parser import parse_drone_info
-from drone import Drone
-from manager import DroneManager
+from core import parse_drone_info, Drone, DroneManager
 
 
 def test_helper_function_exists():

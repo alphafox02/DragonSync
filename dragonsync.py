@@ -37,27 +37,20 @@ import json
 KIT_ID_DEFAULT = "wardragon-unknown"
 KIT_ID = KIT_ID_DEFAULT
 try:
-    from mqtt_sink import MqttSink
+    from sinks.mqtt_sink import MqttSink
 except Exception:
     MqttSink = None
 
 from cryptography.hazmat.primitives.serialization import pkcs12
 from cryptography.hazmat.primitives import serialization
 
-from tak_client import TAKClient
-from tak_udp_client import TAKUDPClient
-from drone import Drone
-from system_status import SystemStatus
-from api_server import serve_api
-from manager import DroneManager
-from messaging import CotMessenger
+from messaging import TAKClient, TAKUDPClient, CotMessenger
+from core import Drone, SystemStatus, DroneManager, parse_drone_info
+from api import serve_api
 from update_check import update_check
 from utils import load_config, validate_config, get_str, get_int, get_float, get_bool
-from telemetry_parser import parse_drone_info
-from aircraft import adsb_worker_loop
-from kismet_ingest import start_kismet_worker
-from signal_ingest import start_signal_worker
-from signal_manager import SignalManager
+from ingest import ADSBTracker, adsb_worker_loop, start_kismet_worker, start_signal_worker
+from monitors import SignalManager
 import logging
 logger = logging.getLogger(__name__)
 
@@ -107,7 +100,12 @@ def _start_rid_lookup_worker() -> None:
             item = _rid_lookup_queue.get()
             if item is None:
                 break
-            drone_obj, serial_number = item
+            # Unpack: tuple of (drone_obj, serial_number, manager) or legacy (drone_obj, serial_number)
+            if len(item) == 3:
+                drone_obj, serial_number, manager = item
+            else:
+                drone_obj, serial_number = item
+                manager = None
             try:
                 # rate limit API calls
                 now = time.time()
@@ -140,6 +138,14 @@ def _start_rid_lookup_worker() -> None:
 
             try:
                 drone_obj.apply_rid_lookup_result(res)
+
+                # NEW: Trigger promotion check if lookup succeeded and manager is available
+                if res.get("found") and manager is not None:
+                    try:
+                        manager.update_or_add_drone(drone_obj.id, drone_obj)
+                        logger.debug(f"Triggered promotion check for {drone_obj.id} after async RID lookup")
+                    except Exception as e:
+                        logger.debug(f"Promotion trigger failed for {drone_obj.id}: {e}")
             except Exception as e:
                 logger.debug("RID lookup apply failed for %s: %s", serial_number, e)
             finally:
@@ -149,8 +155,14 @@ def _start_rid_lookup_worker() -> None:
     _rid_lookup_worker.start()
 
 
-def _queue_rid_lookup(drone_obj: Drone, serial_number: str) -> None:
-    """Queue a background RID lookup (API fallback) without blocking main loop."""
+def _queue_rid_lookup(drone_obj: Drone, serial_number: str, manager=None) -> None:
+    """Queue a background RID lookup (API fallback) without blocking main loop.
+
+    Args:
+        drone_obj: The Drone object to look up
+        serial_number: The drone's serial number
+        manager: Optional DroneManager reference for promotion on success
+    """
     if not _rid_lookup_enabled or not _rid_api_enabled or lookup_serial is None or not serial_number:
         return
     if drone_obj.rid_lookup_pending:
@@ -163,21 +175,26 @@ def _queue_rid_lookup(drone_obj: Drone, serial_number: str) -> None:
         if _rid_lookup_queue.qsize() >= _rid_queue_max:
             logger.debug("RID API queue full; skipping fallback for %s", serial_number)
             return
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Failed to check RID queue size: %s", e)
 
     drone_obj.rid_lookup_pending = True
     drone_obj.rid_lookup_attempted = True  # prevent re-queueing
     try:
-        _rid_lookup_queue.put_nowait((drone_obj, serial_number))
+        _rid_lookup_queue.put_nowait((drone_obj, serial_number, manager))
     except Exception as e:
         drone_obj.rid_lookup_pending = False
         logger.debug("Failed to enqueue RID lookup for %s: %s", serial_number, e)
 
 
-def _apply_rid_lookup(drone_obj: Drone, serial_number: str) -> None:
+def _apply_rid_lookup(drone_obj: Drone, serial_number: str, manager=None) -> None:
     """
     Perform a local DB lookup synchronously; if not found, queue API fallback asynchronously.
+
+    Args:
+        drone_obj: The Drone object to look up
+        serial_number: The drone's serial number
+        manager: Optional DroneManager reference for promotion on async success
     """
     global _rid_lookup_enabled, _rid_lookup_failure_logged
     if not _rid_lookup_enabled or lookup_serial is None or not serial_number:
@@ -204,7 +221,7 @@ def _apply_rid_lookup(drone_obj: Drone, serial_number: str) -> None:
 
     # If not found locally, queue API fallback in the background
     if not drone_obj.rid_lookup_success:
-        _queue_rid_lookup(drone_obj, serial_number)
+        _queue_rid_lookup(drone_obj, serial_number, manager)
 
 UA_TYPE_MAPPING = {
     0: 'No UA type defined',
@@ -431,7 +448,7 @@ def zmq_to_cot(
     multicast_port: Optional[int] = None,
     enable_multicast: bool = False,
     rate_limit: float = 1.0,
-    max_drones: int = 30,
+    max_drones: int = 100,
     inactivity_timeout: float = 60.0,
     multicast_interface: Optional[str] = None,
     multicast_ttl: int = 1,
@@ -446,6 +463,7 @@ def zmq_to_cot(
 
     context = zmq.Context()
     telemetry_socket = context.socket(zmq.SUB)
+    telemetry_socket.setsockopt(zmq.RCVHWM, 2000)  # High water mark for 100 drones
     telemetry_socket.connect(f"tcp://{zmq_host}:{zmq_port}")
     telemetry_socket.setsockopt_string(zmq.SUBSCRIBE, "")
     logger.debug(f"Connected to telemetry ZMQ socket at tcp://{zmq_host}:{zmq_port}")
@@ -453,6 +471,7 @@ def zmq_to_cot(
     # Only create and connect the status_socket if zmq_status_port is provided
     if zmq_status_port:
         status_socket = context.socket(zmq.SUB)
+        status_socket.setsockopt(zmq.CONFLATE, 1)  # Keep only latest status message
         status_socket.connect(f"tcp://{zmq_host}:{zmq_status_port}")
         status_socket.setsockopt_string(zmq.SUBSCRIBE, "")
         logger.debug(f"Connected to status ZMQ socket at tcp://{zmq_host}:{zmq_status_port}")
@@ -519,6 +538,8 @@ def zmq_to_cot(
     # Initialize DroneManager with CotMessenger (no legacy MQTT args)
     drone_manager = DroneManager(
         max_drones=max_drones,
+        max_verified_drones=config.get("max_verified_drones"),
+        max_unverified_drones=config.get("max_unverified_drones"),
         rate_limit=rate_limit,
         inactivity_timeout=inactivity_timeout,
         cot_messenger=cot_messenger,
@@ -557,6 +578,7 @@ def zmq_to_cot(
                     aircraft_cache=drone_manager.aircraft,
                     seen_by=lambda: KIT_ID,
                     cache_ttl=adsb_cache_ttl,
+                    extra_sinks=extra_sinks,
                 ),
                 daemon=True,
             )
@@ -625,8 +647,10 @@ def zmq_to_cot(
     def signal_handler(sig, frame):
         """Handles signal interruptions for graceful shutdown."""
         logger.info("Interrupted by user")
+        telemetry_socket.setsockopt(zmq.LINGER, 0)
         telemetry_socket.close()
         if status_socket:
+            status_socket.setsockopt(zmq.LINGER, 0)
             status_socket.close()
         if not context.closed:
             context.term()
@@ -639,39 +663,39 @@ def zmq_to_cot(
         if drone_manager:
             try:
                 drone_manager.close()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Failed to close drone_manager: %s", e)
         try:
             if api_server:
                 api_server.shutdown()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to shutdown API server: %s", e)
         # Stop RID lookup worker
         try:
             if _rid_lookup_queue is not None:
                 _rid_lookup_queue.put_nowait(None)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to signal RID lookup worker shutdown: %s", e)
         try:
             if kismet_stop:
                 kismet_stop.set()
                 if kismet_thread and kismet_thread.is_alive():
                     kismet_thread.join(timeout=2.0)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to stop Kismet thread: %s", e)
         try:
             if signal_stop:
                 signal_stop.set()
                 if signal_thread and signal_thread.is_alive():
                     signal_thread.join(timeout=2.0)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to stop signal ingest thread: %s", e)
         try:
             adsb_stop.set()
             if adsb_thread and adsb_thread.is_alive():
                 adsb_thread.join(timeout=2.0)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to stop ADS-B thread: %s", e)
         logger.info("Cleaned up ZMQ resources")
         sys.exit(0)
 
@@ -728,25 +752,23 @@ def zmq_to_cot(
 
                     if drone_id in drone_manager.drone_dict:
                         drone = drone_manager.drone_dict[drone_id]
-                        _apply_rid_lookup(drone, serial_number)
+                        _apply_rid_lookup(drone, serial_number, drone_manager)
                         drone.update(**_build_drone_update_kwargs(drone_info, KIT_ID))
                         logger.debug(f"Updated drone: {drone_id}")
                     else:
                         drone = Drone(id=drone_info['id'], **_build_drone_update_kwargs(drone_info, KIT_ID))
-                        _apply_rid_lookup(drone, serial_number)
+                        _apply_rid_lookup(drone, serial_number, drone_manager)
                         drone_manager.update_or_add_drone(drone_id, drone)
                         logger.debug(f"Added new drone: {drone_id}")
                 else:
                     # No primary serial broadcast present (CAA-only)
                     if 'mac' in drone_info and drone_info['mac']:
-                        updated = False
-                        for d in drone_manager.drone_dict.values():
-                            if d.mac == drone_info['mac']:
-                                d.update(**_build_drone_update_kwargs(drone_info, KIT_ID))
-                                logger.debug(f"Updated existing drone with CAA info for MAC: {drone_info['mac']}")
-                                updated = True
-                                break
-                        if not updated:
+                        # Use O(1) MAC index lookup instead of O(n) linear search
+                        drone = drone_manager.get_drone_by_mac(drone_info['mac'])
+                        if drone:
+                            drone.update(**_build_drone_update_kwargs(drone_info, KIT_ID))
+                            logger.debug(f"Updated existing drone with CAA info for MAC: {drone_info['mac']}")
+                        else:
                             logger.debug(f"CAA-only message received for MAC {drone_info['mac']} but no matching drone record exists. Skipping for now.")
                     else:
                         logger.warning("CAA-only message received without a MAC. Skipping.")
@@ -840,24 +862,24 @@ def zmq_to_cot(
         logger.exception("Top-level error in zmq_to_cot — exiting for systemd restart")
         try:
             telemetry_socket.close(0)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to close telemetry socket: %s", e)
         try:
             if status_socket:
                 status_socket.close(0)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to close status socket: %s", e)
         try:
             if not context.closed:
                 context.term()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to terminate ZMQ context: %s", e)
         # ensure sinks shut down
         try:
             if 'drone_manager' in locals() and drone_manager:
                 drone_manager.close()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to close drone_manager on error: %s", e)
         sys.exit(1)
 
 # Configuration and Execution
@@ -871,7 +893,7 @@ if __name__ == "__main__":
     parser.add_argument("--tak-port", type=int, help="TAK server port (optional)")
     parser.add_argument("--tak-protocol", type=str, choices=['TCP', 'UDP'], help="TAK server communication protocol (TCP or UDP)")
     parser.add_argument("--tak-tls-p12", type=str, help="Path to TAK server TLS PKCS#12 file (optional, for TCP)")
-    parser.add_argument("--tak-tls-p12-pass", type=str, help="Password for TAK server TLS PKCS#12 file (optional, for TCP)")
+    parser.add_argument("--tak-tls-p12-pass", type=str, help="Password for TAK server TLS PKCS#12 file (optional, for TCP). Prefer env var TAK_TLS_P12_PASS")
     parser.add_argument("--tak-tls-certfile", type=str, help="Path to TAK TLS client cert (PEM, optional, for TCP)")
     parser.add_argument("--tak-tls-keyfile", type=str, help="Path to TAK TLS client key (PEM, optional, for TCP)")
     parser.add_argument("--tak-tls-cafile", type=str, help="Path to TAK TLS CA file (PEM, optional, for TCP)")
@@ -883,7 +905,9 @@ if __name__ == "__main__":
     parser.add_argument("--multicast-ttl", type=int, help="TTL for multicast packets (default: 1)")
     parser.add_argument("--enable-receive", action="store_true", help="Enable receiving multicast CoT messages")
     parser.add_argument("--rate-limit", type=float, help="Rate limit for sending CoT messages (seconds)")
-    parser.add_argument("--max-drones", type=int, help="Maximum number of drones to track simultaneously")
+    parser.add_argument("--max-drones", type=int, help="Maximum number of drones to track simultaneously (legacy mode)")
+    parser.add_argument("--max-verified-drones", type=int, help="Maximum verified drones (passed FAA RID check, enables tiered mode)")
+    parser.add_argument("--max-unverified-drones", type=int, help="Maximum unverified drones (no RID or failed check, enables tiered mode)")
     parser.add_argument("--inactivity-timeout", type=float, help="Time in seconds before a drone is considered inactive")
     parser.add_argument("-d", "--debug", action="store_true", help="Enable debug logging")
     parser.add_argument("--mqtt-enabled", action="store_true", default=None,
@@ -965,7 +989,9 @@ if __name__ == "__main__":
         "tak_multicast_port": args.tak_multicast_port if args.tak_multicast_port is not None else get_int(config_values.get("tak_multicast_port"), None),
         "enable_multicast": args.enable_multicast or get_bool(config_values.get("enable_multicast"), False),
         "rate_limit": args.rate_limit if args.rate_limit is not None else get_float(config_values.get("rate_limit", 1.0)),
-        "max_drones": args.max_drones if args.max_drones is not None else get_int(config_values.get("max_drones", 30)),
+        "max_drones": args.max_drones if args.max_drones is not None else get_int(config_values.get("max_drones", 100)),
+        "max_verified_drones": args.max_verified_drones if args.max_verified_drones is not None else get_int(config_values.get("max_verified_drones"), None),
+        "max_unverified_drones": args.max_unverified_drones if args.max_unverified_drones is not None else get_int(config_values.get("max_unverified_drones"), None),
         "inactivity_timeout": args.inactivity_timeout if args.inactivity_timeout is not None else get_float(config_values.get("inactivity_timeout", 60.0)),
         "tak_multicast_interface": tak_multicast_interface,
         "multicast_ttl": args.multicast_ttl if args.multicast_ttl is not None else get_int(config_values.get("multicast_ttl", 1)),
@@ -1130,8 +1156,8 @@ if __name__ == "__main__":
                 "drone_rate": config.get("lattice_drone_rate"),
                 "wardragon_rate": config.get("lattice_wd_rate"),
             }
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to parse advanced config sections: %s", e)
         return cfg
 
 
@@ -1151,7 +1177,7 @@ if __name__ == "__main__":
     # MQTT sink (optional)
     mqtt_sink = None
     try:
-        from mqtt_sink import MqttSink  # your existing helper
+        from sinks.mqtt_sink import MqttSink  # your existing helper
     except Exception as e:
         MqttSink = None  # keep running even if not present
         if config.get("mqtt_enabled"):
@@ -1180,6 +1206,8 @@ if __name__ == "__main__":
                 ha_device_base=config.get("mqtt_ha_device_base", "wardragon_drone"),
                 ha_signal_tracker=bool(config.get("mqtt_ha_signal_tracker", False)),
                 ha_signal_id=config.get("mqtt_ha_signal_id", "signal_latest"),
+                aircraft_enabled=bool(config.get("mqtt_aircraft_enabled", False)),
+                aircraft_topic=config.get("mqtt_aircraft_topic", "wardragon/aircraft"),
             )
             logger.info("MQTT sink enabled.")
         except Exception as e:
@@ -1190,7 +1218,7 @@ if __name__ == "__main__":
     lattice_sink = None
     if config["lattice_enabled"]:
         try:
-            from lattice_sink import LatticeSink  # local helper that wraps the Lattice SDK
+            from sinks.lattice_sink import LatticeSink  # local helper that wraps the Lattice SDK
         except Exception as e:
             logger.warning(f"Lattice enabled, but lattice_sink import failed: {e}")
             LatticeSink = None  # type: ignore

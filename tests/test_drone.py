@@ -15,7 +15,7 @@ import pytest
 import time
 import math
 from lxml import etree
-from drone import Drone
+from core import Drone
 
 
 @pytest.fixture
@@ -412,7 +412,7 @@ def test_drone_apply_rid_lookup_result_not_found(minimal_drone):
 
 def test_drone_ua_type_cot_mapping():
     """Test that different UA types map to correct CoT types"""
-    from drone import UA_COT_TYPE_MAP
+    from core.drone import UA_COT_TYPE_MAP
 
     # Fixed wing should map to 'a-f-A-f'
     assert UA_COT_TYPE_MAP[1] == 'a-f-A-f'

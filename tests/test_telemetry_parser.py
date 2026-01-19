@@ -1,5 +1,5 @@
 import json
-from telemetry_parser import parse_drone_info
+from core import parse_drone_info
 
 UA = {
     0: 'No UA type defined',
