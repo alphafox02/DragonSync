@@ -26,29 +26,43 @@ open htmlcov/index.html
 
 ## What's Tested
 
-### test_telemetry_parser.py (DONE)
+### test_telemetry_parser.py (15 tests)
 Tests for telemetry_parser.py - parsing ZMQ messages:
 - DroneID list format (BLE/WiFi Remote ID)
 - DJI list format (with Frequency Message)
 - ESP32 dict format (with AUX_ADV_IND)
 - Edge cases (CAA IDs, empty messages, None values)
-- 20+ tests covering all message formats
+- System Message differences (operator_lat/lon vs latitude/longitude)
+- Operator ID Message parsing
+- Remote ID accuracy fields
+- Speed multiplier and pressure altitude with unit strings
 
-### test_drone.py (TODO - Next Phase)
+### test_drone.py (18 tests)
 Tests for drone.py - Drone class:
-- Drone construction
-- Update method (preserves ID, updates position)
-- CoT XML generation
-- to_dict() method
-- FAA RID cache behavior
+- Initialization (minimal and full parameters)
+- Update method with position tracking
+- Fallback bearing calculation from position delta
+- CoT XML generation (drone, pilot, home)
+- Alert drone suppression (pilot/home not sent for "drone-alert")
+- Dictionary serialization for API (to_dict)
+- FAA RID lookup result caching
+- Frequency formatting (Hz to MHz conversion)
+- UA type to CoT type mapping
 
-### test_manager.py (TODO - Next Phase)
+### test_manager.py (21 tests)
 Tests for manager.py - DroneManager:
-- Adding drones
+- Adding drones (FIFO queue behavior)
 - Updating existing drones
-- Timeout/removal logic
-- Rate limiting
-- Sink publishing
+- Rate limiting for CoT sends
+- Inactivity timeout and cleanup
+- Sink dispatching (MQTT, Lattice, etc.)
+- Multiple sink support with exception handling
+- Track export for API (drones + aircraft)
+- Stale offset calculation
+- Position change tracking
+- Frequency preservation across updates
+
+Total: 54 tests
 
 ## Running Tests
 
