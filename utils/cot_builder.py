@@ -129,11 +129,19 @@ def build_drone_cot(drone, stale_offset: float) -> bytes:
     )
 
     # Rich remarks with all telemetry
+    # Build operator ID display - show N/A if both type and ID are empty
+    op_type = getattr(drone, 'operator_id_type', '')
+    op_id = getattr(drone, 'operator_id', '')
+    if op_type or op_id:
+        operator_display = f"[{op_type}: {op_id}]"
+    else:
+        operator_display = "N/A"
+
     remarks = (
         f"MAC: {drone.mac}, RSSI: {drone.rssi}dBm; "
         f"ID Type: {drone.id_type}; UA Type: {getattr(drone, 'ua_type_name', 'Unknown')} "
         f"({getattr(drone, 'ua_type', 0)}); "
-        f"Operator ID: [{getattr(drone, 'operator_id_type', 'N/A')}: {getattr(drone, 'operator_id', 'N/A')}]; "
+        f"Operator ID: {operator_display}; "
         f"Speed: {drone.speed} m/s; Vert Speed: {drone.vspeed} m/s; "
         f"Altitude: {drone.alt} m; AGL: {drone.height} m; "
         f"Course: {drone.direction}°; "
@@ -151,6 +159,11 @@ def build_drone_cot(drone, stale_offset: float) -> bytes:
     # Alert reason
     if drone.id == "drone-alert":
         remarks += "; Alert: Unknown DJI OcuSync format (Encrypted/Partial)"
+
+    # CAA Registration ID
+    caa_id = getattr(drone, 'caa_id', None)
+    if caa_id:
+        remarks += f"; CAA ID: {caa_id}"
 
     # FAA RID enrichment
     if getattr(drone, 'rid_make', None) or getattr(drone, 'rid_model', None):
@@ -239,6 +252,9 @@ def build_pilot_cot(drone, stale_offset: float) -> bytes:
         iconsetpath='com.atakmap.android.maps.public/Civilian/Person.png'
     )
     pilot_remarks = f"Pilot location for drone {drone.id}"
+    caa_id = getattr(drone, 'caa_id', None)
+    if caa_id:
+        pilot_remarks += f"; CAA ID: {caa_id}"
     if getattr(drone, 'seen_by', None):
         pilot_remarks += f"; SeenBy: {drone.seen_by}"
     if getattr(drone, 'observed_at', None):
@@ -306,6 +322,9 @@ def build_home_cot(drone, stale_offset: float) -> bytes:
         iconsetpath='com.atakmap.android.maps.public/Civilian/House.png'
     )
     home_remarks = f"Home location for drone {drone.id}"
+    caa_id = getattr(drone, 'caa_id', None)
+    if caa_id:
+        home_remarks += f"; CAA ID: {caa_id}"
     if getattr(drone, 'seen_by', None):
         home_remarks += f"; SeenBy: {drone.seen_by}"
     if getattr(drone, 'observed_at', None):
