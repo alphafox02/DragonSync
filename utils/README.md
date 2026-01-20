@@ -1,36 +1,87 @@
-# Utils: RID-aware logging and viewer
+# Utils: Track Logging and Offline Viewer
 
-## ZMQ logger (RID + SQLite)
+## Track Logger (zmq_logger_for_kml.py)
 
-Log telemetry from the ZMQ feed, enriched with FAA RID data (local DB, optional async API fallback).
+**What it logs:**
+- Drone tracks (Remote ID: DJI, BLE, Wi-Fi)
+- Aircraft tracks (ADS-B)
+- FPV signal detections (suscli/DragonOS)
+- System status (GPS, health metrics)
 
-Examples:
+**Output formats:**
+- SQLite database (recommended, enables offline viewer)
+- CSV (legacy, still supported)
+
+**FAA Remote ID enrichment:**
+- Looks up drone make/model from local FAA database
+- Optional async API fallback (won't block logging)
+- Adds `rid_make`, `rid_model`, `rid_source` to each record
+
+**Examples:**
+
 ```bash
 # Basic: CSV only
-python utils/zmq_logger_for_kml.py --output-csv logs/drone_log.csv
+python utils/zmq_logger_for_kml.py --output-csv logs/tracks.csv
 
-# RID enrichment + SQLite (daily rotation, keep 7 days)
+# SQLite with daily rotation (recommended)
 python utils/zmq_logger_for_kml.py \
-  --rid-enabled \
-  --sqlite logs/drone_log.sqlite \
+  --sqlite logs/tracks.sqlite \
   --sqlite-rotate-daily \
   --sqlite-retain-days 7
 
-# Enable FAA API fallback (async; won’t block logging)
-python utils/zmq_logger_for_kml.py --rid-enabled --rid-api --sqlite logs/drone_log.sqlite
+# Enable FAA RID enrichment
+python utils/zmq_logger_for_kml.py \
+  --rid-enabled \
+  --sqlite logs/tracks.sqlite
+
+# Enable FAA API fallback (async)
+python utils/zmq_logger_for_kml.py \
+  --rid-enabled \
+  --rid-api \
+  --sqlite logs/tracks.sqlite
 ```
 
-Key flags:
-- `--rid-enabled` (use local FAA DB), `--rid-api` (async FAA API fallback)
-- `--sqlite <path>` to log to SQLite; `--sqlite-rotate-daily` for per-day files; `--sqlite-retain-days N` to prune old rotated files
-- `--output-csv` still available; you can use both CSV and SQLite together
+**Key flags:**
+- `--sqlite <path>` - Log to SQLite database (enables viewer)
+- `--output-csv <path>` - Log to CSV (can use both CSV and SQLite)
+- `--sqlite-rotate-daily` - Create per-day SQLite files (e.g., tracks-2026-01-19.sqlite)
+- `--sqlite-retain-days N` - Auto-delete rotated files older than N days
+- `--rid-enabled` - Enable FAA Remote ID lookup from local database
+- `--rid-api` - Enable FAA API fallback (async, won't block)
 
-RID columns emitted: `rid_make`, `rid_model`, `rid_source`.
+**Database schema:**
+All tracks include: timestamp, lat, lon, alt, speed, id, id_type, MAC, RSSI, freq, and FAA RID fields (make, model, source).
 
-## Offline viewer
+---
 
-Serve a small map + table UI against the SQLite log (offline-safe canvas map):
+## Offline Viewer (log_viewer.py)
+
+**What it does:**
+- Web-based map + table viewer for SQLite logs
+- Works offline (no external tile dependencies)
+- Filter by drone ID, RID make/model/source, time range
+- Display limit control (performance)
+
+**Usage:**
+
 ```bash
-python utils/log_viewer.py --db logs/drone_log.sqlite --port 5001
+# Start viewer on default port 5001
+python utils/log_viewer.py --db logs/tracks.sqlite
+
+# Custom port
+python utils/log_viewer.py --db logs/tracks.sqlite --port 8080
+
+# Rotated daily logs (viewer auto-handles)
+python utils/log_viewer.py --db logs/tracks-2026-01-19.sqlite
 ```
-Then open `http://127.0.0.1:5001`. Filters: drone id, RID make/model/source, time range, limit. Uses the same RID columns logged above. No external tiles required.
+
+Then open `http://127.0.0.1:5001` in your browser.
+
+**Features:**
+- Canvas-based offline map (no internet required)
+- Real-time filters (drone ID, RID make/model/source)
+- Time range selection
+- Display limit (500/1000/5000/all)
+- Click tracks for details
+
+**Note:** Future versions will replace canvas map with Leaflet for better UX.
