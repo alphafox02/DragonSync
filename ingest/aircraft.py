@@ -40,6 +40,9 @@ class ADSBTracker:
         self.stale = max(stale, 5.0)
         self.uid_prefix = uid_prefix
         self.last_sent: Dict[str, float] = {}
+        self._last_cleanup = 0.0
+        self._cleanup_interval = 300.0  # cleanup every 5 minutes
+        self._entry_ttl = 600.0  # remove entries older than 10 minutes
 
     def make_uid(self, craft: Dict[str, Any]) -> Optional[str]:
         icao = (craft.get("hex") or "").strip().lower()
@@ -47,7 +50,19 @@ class ADSBTracker:
             return None
         return f"{self.uid_prefix}{icao}"
 
+    def _cleanup_last_sent(self):
+        """Remove stale entries from last_sent to prevent unbounded growth."""
+        now = time.time()
+        if now - self._last_cleanup < self._cleanup_interval:
+            return
+        self._last_cleanup = now
+        cutoff = now - self._entry_ttl
+        stale = [k for k, v in self.last_sent.items() if v < cutoff]
+        for k in stale:
+            del self.last_sent[k]
+
     def should_send(self, uid: str) -> bool:
+        self._cleanup_last_sent()  # periodic cleanup to prevent memory leak
         now = time.time()
         last = self.last_sent.get(uid, 0.0)
         if now - last >= self.rate_limit:

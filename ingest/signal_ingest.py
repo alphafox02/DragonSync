@@ -125,6 +125,22 @@ def start_signal_worker(
 ) -> Tuple[Optional[threading.Thread], Optional[threading.Event]]:
     stop_event = threading.Event()
     last_sent: Dict[str, float] = {}
+    last_cleanup = [0.0]  # mutable to allow update in nested function
+    CLEANUP_INTERVAL = 300.0  # cleanup every 5 minutes
+    ENTRY_TTL = 600.0  # remove entries older than 10 minutes
+
+    def _cleanup_last_sent():
+        """Remove stale entries from last_sent to prevent unbounded growth."""
+        now = time.time()
+        if now - last_cleanup[0] < CLEANUP_INTERVAL:
+            return
+        last_cleanup[0] = now
+        cutoff = now - ENTRY_TTL
+        stale = [k for k, v in last_sent.items() if v < cutoff]
+        for k in stale:
+            del last_sent[k]
+        if stale:
+            logger.debug("Cleaned up %d stale entries from FPV signal last_sent", len(stale))
 
     def _get_system_location() -> Optional[Tuple[float, float, float]]:
         if system_status_provider is None:
@@ -152,6 +168,7 @@ def start_signal_worker(
 
         try:
             while not stop_event.is_set():
+                _cleanup_last_sent()  # periodic cleanup to prevent memory leak
                 try:
                     socks = dict(poller.poll(timeout=500))
                 except zmq.error.ZMQError as e:

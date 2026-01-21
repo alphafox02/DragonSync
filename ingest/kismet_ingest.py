@@ -279,11 +279,27 @@ def start_kismet_worker(
     stop_event = threading.Event()
     allowed_phys = phys or DEFAULT_PHYS
     last_sent: Dict[str, float] = {}
+    last_cleanup = [0.0]  # mutable to allow update in nested function
+    CLEANUP_INTERVAL = 300.0  # cleanup every 5 minutes
+    ENTRY_TTL = 600.0  # remove entries older than 10 minutes
     targets_path = target_file or DEFAULT_TARGET_FILE
     targets = _load_targets(targets_path)
     targets_mtime = None
     logged_empty_targets = False
     logged_sample = False
+
+    def _cleanup_last_sent():
+        """Remove stale entries from last_sent to prevent unbounded growth."""
+        now = time.time()
+        if now - last_cleanup[0] < CLEANUP_INTERVAL:
+            return
+        last_cleanup[0] = now
+        cutoff = now - ENTRY_TTL
+        stale = [k for k, v in last_sent.items() if v < cutoff]
+        for k in stale:
+            del last_sent[k]
+        if stale:
+            logger.debug("Cleaned up %d stale entries from Kismet last_sent", len(stale))
 
     def worker():
         nonlocal allowed_phys, logged_sample, targets, targets_mtime, logged_empty_targets
@@ -291,6 +307,7 @@ def start_kismet_worker(
         devices = None
         try:
             while not stop_event.is_set():
+                _cleanup_last_sent()  # periodic cleanup to prevent memory leak
                 polled = sent = skipped_no_loc = skipped_phy = skipped_target = 0
                 try:
                     mtime = targets_path.stat().st_mtime

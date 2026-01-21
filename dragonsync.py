@@ -80,7 +80,7 @@ _rid_api_enabled = False  # API fallback off by default unless enabled via confi
 _rid_queue_max = 100  # drop API fallback when backlog exceeds this
 _rid_rate_limit = 1.0  # seconds between FAA API calls
 _rid_last_api_time = 0.0
-_rid_miss_cache = set()  # serials that returned no result
+_rid_miss_cache: Dict[str, float] = {}  # serials that returned no result -> timestamp
 _rid_miss_cache_max = 1000
 
 
@@ -119,8 +119,10 @@ def _start_rid_lookup_worker() -> None:
                 # cache misses to avoid repeat API hits
                 if not res.get("found"):
                     if len(_rid_miss_cache) >= _rid_miss_cache_max:
-                        _rid_miss_cache.pop()
-                    _rid_miss_cache.add(serial_number)
+                        # Remove oldest entry (FIFO)
+                        oldest = min(_rid_miss_cache, key=_rid_miss_cache.get)
+                        del _rid_miss_cache[oldest]
+                    _rid_miss_cache[serial_number] = time.time()
             except FileNotFoundError as e:
                 if not _rid_lookup_failure_logged:
                     logger.warning("FAA RID lookup skipped (database missing?): %s", e)
