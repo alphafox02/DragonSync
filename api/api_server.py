@@ -45,6 +45,8 @@ logger = logging.getLogger(__name__)
 
 # Rate limiting: track request times per IP address
 _request_times: Dict[str, List[float]] = defaultdict(list)
+_last_cleanup: float = 0.0  # Track when we last did a full cleanup
+_CLEANUP_INTERVAL: float = 300.0  # Clean stale IPs every 5 minutes
 
 
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
@@ -79,8 +81,19 @@ class APIServer(BaseHTTPRequestHandler):
         Default: 100 requests per 60 seconds per IP.
         Returns True if request allowed, False if rate limited.
         """
+        global _last_cleanup
         client_ip = self.client_address[0]
         now = time.time()
+
+        # Periodically clean up stale IPs to prevent unbounded memory growth
+        if now - _last_cleanup > _CLEANUP_INTERVAL:
+            stale_ips = [ip for ip, times in _request_times.items()
+                        if not times or (now - max(times)) > window]
+            for ip in stale_ips:
+                del _request_times[ip]
+            if stale_ips:
+                logger.debug("Rate limiter cleanup: removed %d stale IPs", len(stale_ips))
+            _last_cleanup = now
 
         # Clean up old request times outside the window
         _request_times[client_ip] = [t for t in _request_times[client_ip] if now - t < window]
