@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Copyright 2025 cemaxecuter
+Copyright 2025-2026 CEMAXECUTER LLC.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -279,94 +279,114 @@ def start_kismet_worker(
     stop_event = threading.Event()
     allowed_phys = phys or DEFAULT_PHYS
     last_sent: Dict[str, float] = {}
+    last_cleanup = [0.0]  # mutable to allow update in nested function
+    CLEANUP_INTERVAL = 300.0  # cleanup every 5 minutes
+    ENTRY_TTL = 600.0  # remove entries older than 10 minutes
     targets_path = target_file or DEFAULT_TARGET_FILE
     targets = _load_targets(targets_path)
     targets_mtime = None
     logged_empty_targets = False
     logged_sample = False
 
+    def _cleanup_last_sent():
+        """Remove stale entries from last_sent to prevent unbounded growth."""
+        now = time.time()
+        if now - last_cleanup[0] < CLEANUP_INTERVAL:
+            return
+        last_cleanup[0] = now
+        cutoff = now - ENTRY_TTL
+        stale = [k for k, v in last_sent.items() if v < cutoff]
+        for k in stale:
+            del last_sent[k]
+        if stale:
+            logger.debug("Cleaned up %d stale entries from Kismet last_sent", len(stale))
+
     def worker():
         nonlocal allowed_phys, logged_sample, targets, targets_mtime, logged_empty_targets
         last_ts = 0
         devices = None
-        while not stop_event.is_set():
-            polled = sent = skipped_no_loc = skipped_phy = skipped_target = 0
-            try:
-                mtime = targets_path.stat().st_mtime
-            except Exception:
-                mtime = None
-            if targets_mtime != mtime:
-                targets = _load_targets(targets_path)
-                targets_mtime = mtime
-                logged_empty_targets = False
-                if targets:
-                    logger.info("Kismet targets loaded: %d MACs", len(targets))
-            if not targets:
-                if not logged_empty_targets:
-                    logger.warning("Kismet targets empty or missing; no CoT will be sent.")
-                    logged_empty_targets = True
-                time.sleep(poll_interval)
-                continue
-            try:
-                if devices is None:
-                    devices = kismet_rest.Devices(host_uri=host, apikey=apikey)
-                    logger.info("Kismet ingest connected to %s", host)
-            except Exception as e:
-                logger.warning("Kismet ingest setup failed (%s); retrying in 5s", e)
-                devices = None
-                time.sleep(5)
-                continue
+        try:
+            while not stop_event.is_set():
+                _cleanup_last_sent()  # periodic cleanup to prevent memory leak
+                polled = sent = skipped_no_loc = skipped_phy = skipped_target = 0
+                try:
+                    mtime = targets_path.stat().st_mtime
+                except Exception:
+                    mtime = None
+                if targets_mtime != mtime:
+                    targets = _load_targets(targets_path)
+                    targets_mtime = mtime
+                    logged_empty_targets = False
+                    if targets:
+                        logger.info("Kismet targets loaded: %d MACs", len(targets))
+                if not targets:
+                    if not logged_empty_targets:
+                        logger.warning("Kismet targets empty or missing; no CoT will be sent.")
+                        logged_empty_targets = True
+                    time.sleep(poll_interval)
+                    continue
+                try:
+                    if devices is None:
+                        devices = kismet_rest.Devices(host_uri=host, apikey=apikey)
+                        logger.info("Kismet ingest connected to %s", host)
+                except Exception as e:
+                    logger.warning("Kismet ingest setup failed (%s); retrying in 5s", e)
+                    devices = None
+                    time.sleep(5)
+                    continue
 
-            try:
-                for dev in devices.all(ts=last_ts):
-                    if stop_event.is_set():
-                        break
-                    polled += 1
-                    norm = _normalize_device(dev)
-                    if not norm:
-                        skipped_no_loc += 1
+                try:
+                    for dev in devices.all(ts=last_ts):
+                        if stop_event.is_set():
+                            break
+                        polled += 1
+                        norm = _normalize_device(dev)
+                        if not norm:
+                            skipped_no_loc += 1
+                            if not logged_sample:
+                                logger.debug(
+                                    "Kismet skip: no location; keys=%s",
+                                    list(dev.keys()),
+                                )
+                            continue
+                        if norm["phy"] not in allowed_phys:
+                            skipped_phy += 1
+                            if not logged_sample:
+                                logger.debug("Kismet skip: phy %s not in %s", norm["phy"], allowed_phys)
+                            continue
+                        last_ts = max(last_ts, norm.get("last_time", last_ts))
+                        mac_norm = _normalize_mac(norm.get("mac"))
+                        if not mac_norm or mac_norm not in targets:
+                            skipped_target += 1
+                            continue
+                        uid = norm["uid"]
+                        now = time.time()
+                        last = last_sent.get(uid, 0.0)
+                        if now - last < min_send_interval:
+                            continue
+                        cot = _device_to_cot(norm, seen_by=seen_by)
+                        cot_messenger.send_cot(cot)
+                        last_sent[uid] = now
+                        sent += 1
                         if not logged_sample:
-                            logger.debug(
-                                "Kismet skip: no location; keys=%s",
-                                list(dev.keys()),
-                            )
-                        continue
-                    if norm["phy"] not in allowed_phys:
-                        skipped_phy += 1
-                        if not logged_sample:
-                            logger.debug("Kismet skip: phy %s not in %s", norm["phy"], allowed_phys)
-                        continue
-                    last_ts = max(last_ts, norm.get("last_time", last_ts))
-                    mac_norm = _normalize_mac(norm.get("mac"))
-                    if not mac_norm or mac_norm not in targets:
-                        skipped_target += 1
-                        continue
-                    uid = norm["uid"]
-                    now = time.time()
-                    last = last_sent.get(uid, 0.0)
-                    if now - last < min_send_interval:
-                        continue
-                    cot = _device_to_cot(norm, seen_by=seen_by)
-                    cot_messenger.send_cot(cot)
-                    last_sent[uid] = now
-                    sent += 1
-                    if not logged_sample:
-                        logger.debug("Kismet send sample: uid=%s phy=%s mac=%s lat=%s lon=%s", uid, norm.get("phy"), norm.get("mac"), norm.get("lat"), norm.get("lon"))
-                        logged_sample = True
-            except Exception as e:
-                logger.warning("Kismet ingest error: %s; sleeping %.1fs", e, poll_interval)
-            finally:
-                if polled or sent or skipped_no_loc or skipped_phy or skipped_target:
-                    logger.debug(
-                        "Kismet poll stats: polled=%d sent=%d skipped_no_loc=%d skipped_phy=%d skipped_target=%d allowed_phys=%s",
-                        polled,
-                        sent,
-                        skipped_no_loc,
-                        skipped_phy,
-                        skipped_target,
-                        allowed_phys,
-                    )
-            time.sleep(poll_interval)
+                            logger.debug("Kismet send sample: uid=%s phy=%s mac=%s lat=%s lon=%s", uid, norm.get("phy"), norm.get("mac"), norm.get("lat"), norm.get("lon"))
+                            logged_sample = True
+                except Exception as e:
+                    logger.warning("Kismet ingest error: %s; sleeping %.1fs", e, poll_interval)
+                finally:
+                    if polled or sent or skipped_no_loc or skipped_phy or skipped_target:
+                        logger.debug(
+                            "Kismet poll stats: polled=%d sent=%d skipped_no_loc=%d skipped_phy=%d skipped_target=%d allowed_phys=%s",
+                            polled,
+                            sent,
+                            skipped_no_loc,
+                            skipped_phy,
+                            skipped_target,
+                            allowed_phys,
+                        )
+                time.sleep(poll_interval)
+        except Exception as e:
+            logger.exception("FATAL: Kismet worker crashed with unexpected exception: %s", e)
 
     thread = threading.Thread(target=worker, name="kismet-worker", daemon=True)
     thread.start()

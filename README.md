@@ -20,6 +20,7 @@ DragonSync can also ingest **ADS‑B / UAT (978 MHz)** aircraft data from a loca
 - [HTTP API (Read-Only)](#http-api-read-only)
 - [ADS-B / 978 Integration (Experimental)](#ads-b--978-integration-experimental)
 - [`config.ini` (WarDragon-tuned example)](#configini-wardragon-tuned-example)
+- [Signal Alerts (Optional)](#signal-alerts-optional)
 - [Kismet Ingest (Optional)](#kismet-ingest-optional)
 - [Home Assistant (MQTT)](#home-assistant-mqtt)
 - [Static GPS (if no live GPS)](#static-gps-if-no-live-gps)
@@ -120,7 +121,9 @@ Sniffers (WiFi RID / BLE RID / DJI) --> ZMQ 4224
 WarDragon Monitor (GPS/system)      --> ZMQ 4225
 ADS-B / UAT via readsb (optional)   --> HTTP /?all_with_pos
 
-ZMQ 4224 + ZMQ 4225 + (HTTP) --> DragonSync --> CoT (multicast/TAK)
+FPV energy scan (optional)          --> ZMQ 4226
+
+ZMQ 4224 + ZMQ 4225 + ZMQ 4226 + (HTTP) --> DragonSync --> CoT (multicast/TAK)
                                               \-> MQTT (aggregate + per-drone)
                                               \-> Lattice (optional)
                                               \-> HTTP API (WarDragon ATAK companion)
@@ -128,6 +131,7 @@ ZMQ 4224 + ZMQ 4225 + (HTTP) --> DragonSync --> CoT (multicast/TAK)
 
 - **ZMQ 4224**: stream of decoded Remote ID / DJI frames.
 - **ZMQ 4225**: WarDragon system/GPS info from `wardragon_monitor.py`.
+- **ZMQ 4226**: FPV energy/confirm alerts from `fpv_energy_scan.py` (optional).
 - **readsb HTTP API**: aircraft list from local SDR(s), if enabled.
 - **DragonSync** merges streams, rate‑limits, and outputs:
   - **CoT** to ATAK/WinTAK via **multicast** _or_ **TAK server** (TCP/UDP, optional TLS).
@@ -172,6 +176,7 @@ The API is intended for the **WarDragon ATAK companion plugin** and exposes data
 
 - `GET /status` — system health + kit ID
 - `GET /drones` — drone + aircraft tracks (when enabled)
+- `GET /signals` — signal detections (FPV alerts, optional)
 - `GET /config` — sanitized config
 - `GET /update/check` — git update check (read‑only)
 
@@ -265,12 +270,25 @@ zmq_host = 127.0.0.1
 zmq_port = 4224          # Drone telemetry stream
 zmq_status_port = 4225   # WarDragon monitor (GPS, system)
 
+# FPV signals (optional)
+fpv_enabled = false
+fpv_zmq_host = 127.0.0.1
+fpv_zmq_port = 4226
+fpv_stale = 60
+fpv_radius_m = 15
+fpv_rate_limit = 2.0
+fpv_max_signals = 200
+fpv_confirm_only = true
+
 # TAK Server output (optional). If blank, TAK server is disabled.
 tak_host =
 tak_port =
 tak_protocol =           # "tcp" or "udp"
 tak_tls_p12 =
 tak_tls_p12_pass =
+tak_tls_certfile =
+tak_tls_keyfile =
+tak_tls_cafile =
 tak_tls_skip_verify = true
 
 # Multicast CoT to ATAK (simple zero‑server option)
@@ -306,6 +324,34 @@ per_drone_base = wardragon/drone
 ha_enabled = true
 ha_prefix = homeassistant
 ha_device_base = wardragon_drone
+#
+# Signal alerts (optional)
+mqtt_signals_enabled = false
+mqtt_signals_topic = wardragon/signals
+mqtt_ha_signal_tracker = false
+mqtt_ha_signal_id = signal_latest
+
+### MQTT options explained
+- `mqtt_enabled`: master switch for MQTT output.
+- `mqtt_host` / `mqtt_port`: broker location.
+- `mqtt_topic`: **aggregate** stream where each drone update is a JSON message.
+- `per_drone_enabled`: publish per‑drone state to `mqtt_per_drone_base/<drone_id>` (required for HA discovery).
+- `mqtt_per_drone_base`: base topic for per‑drone JSON.
+- `mqtt_retain`: retain last state on broker (recommended for HA dashboards).
+- `mqtt_username` / `mqtt_password`: broker auth.
+- `mqtt_tls`: enable TLS to broker; set `mqtt_ca_file` and optionally `mqtt_certfile`/`mqtt_keyfile`.
+- `mqtt_tls_insecure`: skip TLS hostname/chain verification (dev only).
+- `mqtt_ha_enabled`: publish Home Assistant discovery entities.
+- `mqtt_ha_prefix`: HA discovery topic prefix (default `homeassistant`).
+- `mqtt_ha_device_base`: HA device ID prefix for drones.
+- `mqtt_signals_enabled`: publish signal alerts to MQTT.
+- `mqtt_signals_topic`: topic for signal alerts (JSON).
+- `mqtt_ha_signal_tracker`: create a **per‑kit** HA map dot that jumps to the latest signal seen by that kit (uses `seen_by`).
+- `mqtt_ha_signal_id`: unique ID suffix for the HA signal entity.
+
+**Hard‑coded system topics** (not configurable yet):
+- `wardragon/system/attrs` (kit status attributes)
+- `wardragon/system/availability` and `wardragon/service/availability`
 
 # Lattice (optional)
 lattice_enabled = false
@@ -325,6 +371,33 @@ adsb_json_url = http://127.0.0.1:8080/?all_with_pos
 adsb_min_alt = 0
 adsb_max_alt = 0
 ```
+
+---
+
+## Signal Alerts (Optional)
+
+DragonSync can ingest **signal alerts** (currently FPV energy/confirm from the WarDragon FPV scan) and emit CoT spot reports. These are **not** drone tracks; they show as near‑kit alerts and are exposed via `GET /signals` for the ATAK plugin.
+
+If MQTT is enabled with `mqtt_signals_enabled=true`, alerts are also published to `wardragon/signals`. When `mqtt_ha_signal_tracker=true`, DragonSync publishes per‑kit signal attributes to `wardragon/signals/<seen_by>` for HA map dots.
+
+**Enable**
+
+```ini
+fpv_enabled = true
+fpv_zmq_host = 127.0.0.1
+fpv_zmq_port = 4226
+fpv_stale = 60
+fpv_radius_m = 15
+fpv_rate_limit = 2.0
+fpv_max_signals = 200
+fpv_confirm_only = true
+```
+
+**Notes**
+
+- Source data comes from the **wardragon-fpv-detect** repo (e.g., `scripts/fpv_energy_scan.py`) and is published over XPUB ZMQ.
+- `fpv_radius_m` controls how far the alert dot is offset from the kit location.
+- By default, only `confirm` alerts are ingested. Set `fpv_confirm_only = false` to include `energy`.
 
 ---
 
@@ -384,6 +457,8 @@ sudo systemctl enable --now mosquitto
 ### Entities created by DragonSync
 - **Device trackers**: `drone-<id>` (main dot), `pilot-<id-tail>`, `home-<id-tail>` (if pilot/home known).
 - **Sensors**: lat/lon/alt/speed/vspeed/course/AGL/RSSI/freq_mhz/etc.
+- **Signals (optional)**: if `mqtt_signals_enabled=true`, publishes alerts to `wardragon/signals`.
+- **HA signal dot (optional)**: set `mqtt_ha_signal_tracker=true` to create a per‑kit “Signal Alert” device_tracker that jumps to the latest alert from that kit.
 
 **Behavior on timeout**: when a drone stops updating for `inactivity_timeout`, DragonSync marks the trackers **offline** (hidden on the map) but **keeps last‑known location in HA history**.
 
@@ -421,7 +496,9 @@ static_alt = 220
 
 ### TAK Server (unicast)
 - Set `tak_host`, `tak_port`, `tak_protocol` (`tcp` or `udp`).
-- For TLS servers, set `tak_tls_p12` and `tak_tls_p12_pass`.
+- For TLS servers, use **one** of:
+  - `tak_tls_p12` + `tak_tls_p12_pass`, or
+  - `tak_tls_certfile` + `tak_tls_keyfile` (+ optional `tak_tls_cafile`).
 - You can use `tak_tls_skip_verify=true` for testing self‑signed certs (turn off in production).
 
 ---
@@ -439,7 +516,8 @@ Enable with `lattice_enabled=true` and set either `lattice_base_url` or `lattice
 - **No entities in HA**: ensure `mqtt_enabled=true`, `per_drone_enabled=true`, `ha_enabled=true`. Watch `homeassistant/#` for discovery messages.
 - **Template warnings in HA**: DragonSync uses resilient templates (e.g., `| float(0)`), so you should not see float/None errors. If you customized templates, prefer `| float(0)`.
 - **Entities don’t disappear**: your DragonSync `DroneManager` should call `mark_inactive(drone_id)` on timeout (the WarDragon repo includes this). That sets HA trackers to **offline** while preserving history.
-- **TAK TLS**: verify `.p12` path/password; try `tak_tls_skip_verify=true` for dev.
+- **TAK TLS**: verify `.p12` path/password or PEM paths; try `tak_tls_skip_verify=true` for dev.
+- **OpenSSL 3 / legacy .p12**: older PKCS#12 files using RC2 may fail to load; convert to PEM or enable the legacy provider.
 - **ADS-B issues**: verify `readsb` is running and that `curl http://127.0.0.1:8080/?all_with_pos` returns JSON with an `aircraft` array.
 
 ---

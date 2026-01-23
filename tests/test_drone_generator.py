@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
 """
-MIT License
-
-Copyright (c) 2025 cemaxecuter
-
 Test Drone Detection Message Generator for DragonSync
 
 Publishes simulated drone detection messages to ZMQ telemetry stream for testing

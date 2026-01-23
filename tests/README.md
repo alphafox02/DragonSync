@@ -86,6 +86,7 @@ python3 generate_scenario.py --lat 25.7617 --lon -80.1918
 ## Tool 2: run_test_scenario.sh
 
 Wrapper script that manages the `zmq-decoder` service to avoid port conflicts.
+If the scenario JSON includes an `fpv` block, it also launches the FPV generator.
 
 ### What it does
 
@@ -364,6 +365,7 @@ chmod +x run_test_scenario.sh
 | `generate_scenario.py` | Generate drone flight scenarios |
 | `run_test_scenario.sh` | Wrapper to run tests (manages services) |
 | `test_drone_generator.py` | Publishes drone telemetry to ZMQ |
+| `test_fpv_generator.py` | Publishes FPV signal alerts to ZMQ |
 | `test_zmq_listener.py` | Debug tool to view ZMQ messages |
 | `verify_scenario.py` | Validate scenario files |
 | `test_scenarios.json` | Example scenario file with static/animated tracks |
@@ -387,6 +389,9 @@ chmod +x run_test_scenario.sh
 # Generate scenario for Boston area
 python3 generate_scenario.py --lat 42.3601 --lon -71.0589
 
+# Generate scenario with FPV alerts
+python3 generate_scenario.py --lat 42.3601 --lon -71.0589 --fpv
+
 # Verify it's valid
 python3 verify_scenario.py scenario_4236_-7106.json
 
@@ -396,6 +401,18 @@ python3 verify_scenario.py scenario_4236_-7106.json
 # Watch DragonSync process the drones
 # Press Ctrl+C when done
 # zmq-decoder service automatically restarts
+```
+
+---
+
+## Example: FPV Signal Test
+
+```bash
+# In one terminal, run DragonSync with fpv_enabled=true
+python3 test_fpv_generator.py --zmq-host 127.0.0.1 --zmq-port 4226 --source energy --interval 2
+
+# Optional confirm alert (default ingest only takes confirm)
+python3 test_fpv_generator.py --zmq-host 127.0.0.1 --zmq-port 4226 --source confirm --interval 2
 ```
 
 ---

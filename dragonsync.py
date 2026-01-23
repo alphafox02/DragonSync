@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Copyright 2025 cemaxecuter
+Copyright 2025-2026 CEMAXECUTER LLC.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -37,25 +37,20 @@ import json
 KIT_ID_DEFAULT = "wardragon-unknown"
 KIT_ID = KIT_ID_DEFAULT
 try:
-    from mqtt_sink import MqttSink
+    from sinks.mqtt_sink import MqttSink
 except Exception:
     MqttSink = None
 
 from cryptography.hazmat.primitives.serialization import pkcs12
 from cryptography.hazmat.primitives import serialization
 
-from tak_client import TAKClient
-from tak_udp_client import TAKUDPClient
-from drone import Drone
-from system_status import SystemStatus
-from api_server import serve_api
-from manager import DroneManager
-from messaging import CotMessenger
+from messaging import TAKClient, TAKUDPClient, CotMessenger
+from core import Drone, SystemStatus, DroneManager, parse_drone_info
+from api import serve_api
 from update_check import update_check
 from utils import load_config, validate_config, get_str, get_int, get_float, get_bool
-from telemetry_parser import parse_drone_info
-from aircraft import adsb_worker_loop
-from kismet_ingest import start_kismet_worker
+from ingest import ADSBTracker, adsb_worker_loop, start_kismet_worker, start_signal_worker
+from monitors import SignalManager
 import logging
 logger = logging.getLogger(__name__)
 
@@ -85,7 +80,7 @@ _rid_api_enabled = False  # API fallback off by default unless enabled via confi
 _rid_queue_max = 100  # drop API fallback when backlog exceeds this
 _rid_rate_limit = 1.0  # seconds between FAA API calls
 _rid_last_api_time = 0.0
-_rid_miss_cache = set()  # serials that returned no result
+_rid_miss_cache: Dict[str, float] = {}  # serials that returned no result -> timestamp
 _rid_miss_cache_max = 1000
 
 
@@ -105,7 +100,12 @@ def _start_rid_lookup_worker() -> None:
             item = _rid_lookup_queue.get()
             if item is None:
                 break
-            drone_obj, serial_number = item
+            # Unpack: tuple of (drone_obj, serial_number, manager) or legacy (drone_obj, serial_number)
+            if len(item) == 3:
+                drone_obj, serial_number, manager = item
+            else:
+                drone_obj, serial_number = item
+                manager = None
             try:
                 # rate limit API calls
                 now = time.time()
@@ -119,8 +119,10 @@ def _start_rid_lookup_worker() -> None:
                 # cache misses to avoid repeat API hits
                 if not res.get("found"):
                     if len(_rid_miss_cache) >= _rid_miss_cache_max:
-                        _rid_miss_cache.pop()
-                    _rid_miss_cache.add(serial_number)
+                        # Remove oldest entry (FIFO)
+                        oldest = min(_rid_miss_cache, key=_rid_miss_cache.get)
+                        del _rid_miss_cache[oldest]
+                    _rid_miss_cache[serial_number] = time.time()
             except FileNotFoundError as e:
                 if not _rid_lookup_failure_logged:
                     logger.warning("FAA RID lookup skipped (database missing?): %s", e)
@@ -138,6 +140,14 @@ def _start_rid_lookup_worker() -> None:
 
             try:
                 drone_obj.apply_rid_lookup_result(res)
+
+                # NEW: Trigger promotion check if lookup succeeded and manager is available
+                if res.get("found") and manager is not None:
+                    try:
+                        manager.update_or_add_drone(drone_obj.id, drone_obj)
+                        logger.debug(f"Triggered promotion check for {drone_obj.id} after async RID lookup")
+                    except Exception as e:
+                        logger.debug(f"Promotion trigger failed for {drone_obj.id}: {e}")
             except Exception as e:
                 logger.debug("RID lookup apply failed for %s: %s", serial_number, e)
             finally:
@@ -147,8 +157,14 @@ def _start_rid_lookup_worker() -> None:
     _rid_lookup_worker.start()
 
 
-def _queue_rid_lookup(drone_obj: Drone, serial_number: str) -> None:
-    """Queue a background RID lookup (API fallback) without blocking main loop."""
+def _queue_rid_lookup(drone_obj: Drone, serial_number: str, manager=None) -> None:
+    """Queue a background RID lookup (API fallback) without blocking main loop.
+
+    Args:
+        drone_obj: The Drone object to look up
+        serial_number: The drone's serial number
+        manager: Optional DroneManager reference for promotion on success
+    """
     if not _rid_lookup_enabled or not _rid_api_enabled or lookup_serial is None or not serial_number:
         return
     if drone_obj.rid_lookup_pending:
@@ -161,21 +177,26 @@ def _queue_rid_lookup(drone_obj: Drone, serial_number: str) -> None:
         if _rid_lookup_queue.qsize() >= _rid_queue_max:
             logger.debug("RID API queue full; skipping fallback for %s", serial_number)
             return
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Failed to check RID queue size: %s", e)
 
     drone_obj.rid_lookup_pending = True
     drone_obj.rid_lookup_attempted = True  # prevent re-queueing
     try:
-        _rid_lookup_queue.put_nowait((drone_obj, serial_number))
+        _rid_lookup_queue.put_nowait((drone_obj, serial_number, manager))
     except Exception as e:
         drone_obj.rid_lookup_pending = False
         logger.debug("Failed to enqueue RID lookup for %s: %s", serial_number, e)
 
 
-def _apply_rid_lookup(drone_obj: Drone, serial_number: str) -> None:
+def _apply_rid_lookup(drone_obj: Drone, serial_number: str, manager=None) -> None:
     """
     Perform a local DB lookup synchronously; if not found, queue API fallback asynchronously.
+
+    Args:
+        drone_obj: The Drone object to look up
+        serial_number: The drone's serial number
+        manager: Optional DroneManager reference for promotion on async success
     """
     global _rid_lookup_enabled, _rid_lookup_failure_logged
     if not _rid_lookup_enabled or lookup_serial is None or not serial_number:
@@ -202,7 +223,7 @@ def _apply_rid_lookup(drone_obj: Drone, serial_number: str) -> None:
 
     # If not found locally, queue API fallback in the background
     if not drone_obj.rid_lookup_success:
-        _queue_rid_lookup(drone_obj, serial_number)
+        _queue_rid_lookup(drone_obj, serial_number, manager)
 
 UA_TYPE_MAPPING = {
     0: 'No UA type defined',
@@ -223,6 +244,59 @@ UA_TYPE_MAPPING = {
     15: 'Other type',
 }
 
+
+def _build_drone_update_kwargs(drone_info: Dict[str, Any], kit_id: str) -> Dict[str, Any]:
+    """
+    Extract common drone update parameters from parsed drone_info.
+    Works for both new Drone() construction and drone.update() calls.
+
+    Args:
+        drone_info: Parsed drone telemetry dictionary
+        kit_id: Current kit identifier for seen_by field
+
+    Returns:
+        Dictionary of kwargs suitable for Drone.__init__ or Drone.update
+    """
+    return {
+        'lat': drone_info.get('lat', 0.0),
+        'lon': drone_info.get('lon', 0.0),
+        'speed': drone_info.get('speed', 0.0),
+        'vspeed': drone_info.get('vspeed', 0.0),
+        'alt': drone_info.get('alt', 0.0),
+        'height': drone_info.get('height', 0.0),
+        'pilot_lat': drone_info.get('pilot_lat', 0.0),
+        'pilot_lon': drone_info.get('pilot_lon', 0.0),
+        'description': drone_info.get('description', ""),
+        'mac': drone_info.get('mac', ""),
+        'rssi': drone_info.get('rssi', 0),
+        'home_lat': drone_info.get('home_lat', 0.0),
+        'home_lon': drone_info.get('home_lon', 0.0),
+        'id_type': drone_info.get('id_type', ""),
+        'ua_type': drone_info.get('ua_type'),
+        'ua_type_name': drone_info.get('ua_type_name', ""),
+        'operator_id_type': drone_info.get('operator_id_type', ""),
+        'operator_id': drone_info.get('operator_id', ""),
+        'op_status': drone_info.get('op_status', ""),
+        'height_type': drone_info.get('height_type', ""),
+        'ew_dir': drone_info.get('ew_dir', ""),
+        'direction': drone_info.get('direction'),
+        'speed_multiplier': drone_info.get('speed_multiplier'),
+        'pressure_altitude': drone_info.get('pressure_altitude'),
+        'vertical_accuracy': drone_info.get('vertical_accuracy', ""),
+        'horizontal_accuracy': drone_info.get('horizontal_accuracy', ""),
+        'baro_accuracy': drone_info.get('baro_accuracy', ""),
+        'speed_accuracy': drone_info.get('speed_accuracy', ""),
+        'timestamp': drone_info.get('timestamp', ""),
+        'rid_timestamp': drone_info.get('rid_timestamp', ""),
+        'observed_at': time.time(),
+        'timestamp_accuracy': drone_info.get('timestamp_accuracy', ""),
+        'index': drone_info.get('index', 0),
+        'runtime': drone_info.get('runtime', 0),
+        'caa_id': drone_info.get('caa', ""),
+        'freq': drone_info.get('freq'),
+        'seen_by': kit_id
+    }
+
 # Setup logging
 def setup_logging(debug: bool):
     """Set up logging configuration."""
@@ -240,7 +314,32 @@ def setup_logging(debug: bool):
 
 logger = logging.getLogger(__name__)
 
-def setup_tls_context(tak_tls_p12: str, tak_tls_p12_pass: Optional[str], tak_tls_skip_verify: bool) -> Optional[ssl.SSLContext]:
+def setup_tls_context(
+    tak_tls_p12: Optional[str],
+    tak_tls_p12_pass: Optional[str],
+    tak_tls_certfile: Optional[str],
+    tak_tls_keyfile: Optional[str],
+    tak_tls_cafile: Optional[str],
+    tak_tls_skip_verify: bool,
+) -> Optional[ssl.SSLContext]:
+    """Sets up the TLS context using PKCS#12 or PEM files."""
+    if not tak_tls_p12 and not (tak_tls_certfile and tak_tls_keyfile):
+        return None
+
+    if tak_tls_p12:
+        if tak_tls_certfile or tak_tls_keyfile:
+            logger.warning("Both PKCS#12 and PEM TLS config provided; using PKCS#12.")
+        return setup_tls_context_from_p12(
+            tak_tls_p12, tak_tls_p12_pass, tak_tls_skip_verify
+        )
+    return setup_tls_context_from_pem(
+        tak_tls_certfile, tak_tls_keyfile, tak_tls_cafile, tak_tls_skip_verify
+    )
+
+
+def setup_tls_context_from_p12(
+    tak_tls_p12: str, tak_tls_p12_pass: Optional[str], tak_tls_skip_verify: bool
+) -> Optional[ssl.SSLContext]:
     """Sets up the TLS context using the provided PKCS#12 file."""
     if not tak_tls_p12:
         return None
@@ -313,6 +412,32 @@ def setup_tls_context(tak_tls_p12: str, tak_tls_p12_pass: Optional[str], tak_tls
 
     return tls_context
 
+
+def setup_tls_context_from_pem(
+    tak_tls_certfile: Optional[str],
+    tak_tls_keyfile: Optional[str],
+    tak_tls_cafile: Optional[str],
+    tak_tls_skip_verify: bool,
+) -> Optional[ssl.SSLContext]:
+    """Sets up the TLS context using PEM files."""
+    if not tak_tls_certfile or not tak_tls_keyfile:
+        logger.critical("TAK TLS PEM requires both 'tak_tls_certfile' and 'tak_tls_keyfile'.")
+        sys.exit(1)
+
+    try:
+        tls_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+        tls_context.load_cert_chain(certfile=tak_tls_certfile, keyfile=tak_tls_keyfile)
+        if tak_tls_cafile:
+            tls_context.load_verify_locations(cafile=tak_tls_cafile)
+        if tak_tls_skip_verify:
+            tls_context.check_hostname = False
+            tls_context.verify_mode = ssl.CERT_NONE
+    except Exception as e:
+        logger.critical(f"Failed to set up TLS context (PEM): {e}")
+        sys.exit(1)
+
+    return tls_context
+
 def zmq_to_cot(
     zmq_host: str,
     zmq_port: int,
@@ -325,21 +450,13 @@ def zmq_to_cot(
     multicast_port: Optional[int] = None,
     enable_multicast: bool = False,
     rate_limit: float = 1.0,
-    max_drones: int = 30,
+    max_drones: int = 100,
     inactivity_timeout: float = 60.0,
     multicast_interface: Optional[str] = None,
     multicast_ttl: int = 1,
     enable_receive: bool = False,
     lattice_sink: Optional[object] = None,
     mqtt_sink: Optional[object] = None,
-    adsb_enabled=False,
-    adsb_json_url=None,
-    adsb_uid_prefix="adsb-",
-    adsb_cot_stale=15.0,
-    adsb_rate_limit=3.0,
-    adsb_min_alt=0,
-    adsb_max_alt=0,
-    adsb_cache_ttl=120.0,
 ):
     """Main function to convert ZMQ messages to CoT and send to TAK server."""
     global KIT_ID
@@ -348,6 +465,7 @@ def zmq_to_cot(
 
     context = zmq.Context()
     telemetry_socket = context.socket(zmq.SUB)
+    telemetry_socket.setsockopt(zmq.RCVHWM, 2000)  # High water mark for 100 drones
     telemetry_socket.connect(f"tcp://{zmq_host}:{zmq_port}")
     telemetry_socket.setsockopt_string(zmq.SUBSCRIBE, "")
     logger.debug(f"Connected to telemetry ZMQ socket at tcp://{zmq_host}:{zmq_port}")
@@ -355,6 +473,7 @@ def zmq_to_cot(
     # Only create and connect the status_socket if zmq_status_port is provided
     if zmq_status_port:
         status_socket = context.socket(zmq.SUB)
+        status_socket.setsockopt(zmq.CONFLATE, 1)  # Keep only latest status message
         status_socket.connect(f"tcp://{zmq_host}:{zmq_status_port}")
         status_socket.setsockopt_string(zmq.SUBSCRIBE, "")
         logger.debug(f"Connected to status ZMQ socket at tcp://{zmq_host}:{zmq_status_port}")
@@ -421,6 +540,8 @@ def zmq_to_cot(
     # Initialize DroneManager with CotMessenger (no legacy MQTT args)
     drone_manager = DroneManager(
         max_drones=max_drones,
+        max_verified_drones=config.get("max_verified_drones"),
+        max_unverified_drones=config.get("max_unverified_drones"),
         rate_limit=rate_limit,
         inactivity_timeout=inactivity_timeout,
         cot_messenger=cot_messenger,
@@ -430,6 +551,15 @@ def zmq_to_cot(
     # ---- Optional ADS-B worker (dump1090 aircraft.json) ----
     adsb_stop = threading.Event()
     adsb_thread = None
+
+    adsb_enabled = config.get("adsb_enabled", False)
+    adsb_json_url = config.get("adsb_json_url")
+    adsb_uid_prefix = config.get("adsb_uid_prefix", "adsb-")
+    adsb_cot_stale = config.get("adsb_cot_stale", 15.0)
+    adsb_rate_limit = config.get("adsb_rate_limit", 3.0)
+    adsb_min_alt = config.get("adsb_min_alt", 0)
+    adsb_max_alt = config.get("adsb_max_alt", 0)
+    adsb_cache_ttl = config.get("adsb_cache_ttl", 120.0)
 
     if adsb_enabled and adsb_json_url:
         try:
@@ -450,6 +580,7 @@ def zmq_to_cot(
                     aircraft_cache=drone_manager.aircraft,
                     seen_by=lambda: KIT_ID,
                     cache_ttl=adsb_cache_ttl,
+                    extra_sinks=extra_sinks,
                 ),
                 daemon=True,
             )
@@ -458,6 +589,35 @@ def zmq_to_cot(
             logger.exception(f"Failed to start ADS-B worker: {e}")
     else:
         logger.info("ADS-B ingestion disabled or adsb_json_url not set; skipping ADS-B worker.")
+
+    # ---- Optional FPV signal ingest (ZMQ 4226) ----
+    signal_manager = SignalManager(
+        ttl_s=config.get("fpv_stale", 60.0),
+        max_signals=config.get("fpv_max_signals", 200),
+    )
+    signal_thread = None
+    signal_stop = None
+    if config.get("fpv_enabled"):
+        try:
+            signal_thread, signal_stop = start_signal_worker(
+                zmq_host=config.get("fpv_zmq_host", "127.0.0.1"),
+                zmq_port=int(config.get("fpv_zmq_port", 4226)),
+                cot_messenger=cot_messenger,
+                signal_manager=signal_manager,
+                mqtt_sink=mqtt_sink,
+                stale_s=float(config.get("fpv_stale", 60.0)),
+                radius_m=float(config.get("fpv_radius_m", 15.0)),
+                min_send_interval=float(config.get("fpv_rate_limit", 2.0)),
+                confirm_only=bool(config.get("fpv_confirm_only", True)),
+                seen_by_provider=lambda: KIT_ID,
+                system_status_provider=lambda: system_status_latest,
+            )
+            logger.info("FPV signal ingest enabled.")
+        except Exception as e:
+            logger.warning("Failed to start FPV signal ingest: %s", e)
+            signal_thread, signal_stop = None, None
+    else:
+        logger.info("FPV signal ingest disabled; set fpv_enabled=true to enable.")
 
     # Start API server (read-only) to expose status and tracks
     api_server = None
@@ -470,6 +630,7 @@ def zmq_to_cot(
             api_port = int(env_port) if env_port is not None else int(config.get("api_port", 8088))
             api_server = serve_api(
                 manager=drone_manager,
+                signal_manager=signal_manager,
                 system_status_provider=lambda: system_status_latest,
                 kit_id_provider=lambda: KIT_ID,
                 config_provider=_sanitized_config,
@@ -488,8 +649,10 @@ def zmq_to_cot(
     def signal_handler(sig, frame):
         """Handles signal interruptions for graceful shutdown."""
         logger.info("Interrupted by user")
+        telemetry_socket.setsockopt(zmq.LINGER, 0)
         telemetry_socket.close()
         if status_socket:
+            status_socket.setsockopt(zmq.LINGER, 0)
             status_socket.close()
         if not context.closed:
             context.term()
@@ -502,32 +665,39 @@ def zmq_to_cot(
         if drone_manager:
             try:
                 drone_manager.close()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Failed to close drone_manager: %s", e)
         try:
             if api_server:
                 api_server.shutdown()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to shutdown API server: %s", e)
         # Stop RID lookup worker
         try:
             if _rid_lookup_queue is not None:
                 _rid_lookup_queue.put_nowait(None)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to signal RID lookup worker shutdown: %s", e)
         try:
             if kismet_stop:
                 kismet_stop.set()
                 if kismet_thread and kismet_thread.is_alive():
                     kismet_thread.join(timeout=2.0)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to stop Kismet thread: %s", e)
+        try:
+            if signal_stop:
+                signal_stop.set()
+                if signal_thread and signal_thread.is_alive():
+                    signal_thread.join(timeout=2.0)
+        except Exception as e:
+            logger.warning("Failed to stop signal ingest thread: %s", e)
         try:
             adsb_stop.set()
             if adsb_thread and adsb_thread.is_alive():
                 adsb_thread.join(timeout=2.0)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to stop ADS-B thread: %s", e)
         logger.info("Cleaned up ZMQ resources")
         sys.exit(0)
 
@@ -572,152 +742,43 @@ def zmq_to_cot(
 
                 # --- Updated logic for handling serial vs. CAA-only broadcasts ---
                 if 'id' in drone_info:
-                    if not drone_info['id'].startswith('drone-'):
-                        drone_info['id'] = f"drone-{drone_info['id']}"
-                        logger.debug(f"Ensured drone id with prefix: {drone_info['id']}")
+                    # Validate drone ID is not None or empty before string operations
+                    drone_id_value = drone_info['id']
+                    if not drone_id_value or not isinstance(drone_id_value, str):
+                        logger.warning(f"Invalid drone ID (None/empty/non-string), skipping message: {drone_info}")
+                        continue
+
+                    if not drone_id_value.startswith('drone-'):
+                        drone_id_value = f"drone-{drone_id_value}"
+                        logger.debug(f"Ensured drone id with prefix: {drone_id_value}")
                     else:
-                        logger.debug(f"Drone id already has prefix: {drone_info['id']}")
-                    drone_id = drone_info['id']
+                        logger.debug(f"Drone id already has prefix: {drone_id_value}")
+
+                    drone_info['id'] = drone_id_value
+                    drone_id = drone_id_value
                     serial_number = drone_id[len("drone-"):] if drone_id.startswith("drone-") else drone_id
 
                     logger.debug(f"Drone detailts for id: {drone_id} - {drone_info}")
 
                     if drone_id in drone_manager.drone_dict:
                         drone = drone_manager.drone_dict[drone_id]
-                        _apply_rid_lookup(drone, serial_number)
-                        drone.update(
-                            lat=drone_info.get('lat', 0.0),
-                            lon=drone_info.get('lon', 0.0),
-                            speed=drone_info.get('speed', 0.0),
-                            vspeed=drone_info.get('vspeed', 0.0),
-                            alt=drone_info.get('alt', 0.0),
-                            height=drone_info.get('height', 0.0),
-                            pilot_lat=drone_info.get('pilot_lat', 0.0),
-                            pilot_lon=drone_info.get('pilot_lon', 0.0),
-                            description=drone_info.get('description', ""),
-                            mac=drone_info.get('mac', ""),
-                            rssi=drone_info.get('rssi', 0),
-                            home_lat=drone_info.get('home_lat', 0.0),
-                            home_lon=drone_info.get('home_lon', 0.0),
-                            id_type=drone_info.get('id_type', ""),
-                            ua_type=drone_info.get('ua_type'),
-                            ua_type_name=drone_info.get('ua_type_name', ""),
-                            operator_id_type=drone_info.get('operator_id_type', ""),
-                            operator_id=drone_info.get('operator_id', ""),
-                            op_status=drone_info.get('op_status', ""),
-                            height_type=drone_info.get('height_type', ""),
-                            ew_dir=drone_info.get('ew_dir', ""),
-                            direction=drone_info.get('direction'),
-                            speed_multiplier=drone_info.get('speed_multiplier'),
-                            pressure_altitude=drone_info.get('pressure_altitude'),
-                            vertical_accuracy=drone_info.get('vertical_accuracy', ""),
-                            horizontal_accuracy=drone_info.get('horizontal_accuracy', ""),
-                            baro_accuracy=drone_info.get('baro_accuracy', ""),
-                            speed_accuracy=drone_info.get('speed_accuracy', ""),
-                            timestamp=drone_info.get('timestamp', ""),
-                            rid_timestamp=drone_info.get('rid_timestamp', ""),
-                            observed_at=time.time(),
-                            timestamp_accuracy=drone_info.get('timestamp_accuracy', ""),
-                            index=drone_info.get('index', 0),
-                            runtime=drone_info.get('runtime', 0),
-                            caa_id=drone_info.get('caa', ""),
-                            freq=drone_info.get('freq'),
-                            seen_by=KIT_ID
-                        )
+                        _apply_rid_lookup(drone, serial_number, drone_manager)
+                        drone.update(**_build_drone_update_kwargs(drone_info, KIT_ID))
                         logger.debug(f"Updated drone: {drone_id}")
                     else:
-                        drone = Drone(
-                            id=drone_info['id'],
-                            lat=drone_info.get('lat', 0.0),
-                            lon=drone_info.get('lon', 0.0),
-                            speed=drone_info.get('speed', 0.0),
-                            vspeed=drone_info.get('vspeed', 0.0),
-                            alt=drone_info.get('alt', 0.0),
-                            height=drone_info.get('height', 0.0),
-                            pilot_lat=drone_info.get('pilot_lat', 0.0),
-                            pilot_lon=drone_info.get('pilot_lon', 0.0),
-                            description=drone_info.get('description', ""),
-                            mac=drone_info.get('mac', ""),
-                            rssi=drone_info.get('rssi', 0),
-                            home_lat=drone_info.get('home_lat', 0.0),
-                            home_lon=drone_info.get('home_lon', 0.0),
-                            id_type=drone_info.get('id_type', ""),
-                            ua_type=drone_info.get('ua_type'),
-                            ua_type_name=drone_info.get('ua_type_name', ""),
-                            operator_id_type=drone_info.get('operator_id_type', ""),
-                            operator_id=drone_info.get('operator_id', ""),
-                            op_status=drone_info.get('op_status', ""),
-                            height_type=drone_info.get('height_type', ""),
-                            ew_dir=drone_info.get('ew_dir', ""),
-                            direction=drone_info.get('direction'),
-                            speed_multiplier=drone_info.get('speed_multiplier'),
-                            pressure_altitude=drone_info.get('pressure_altitude'),
-                            vertical_accuracy=drone_info.get('vertical_accuracy', ""),
-                            horizontal_accuracy=drone_info.get('horizontal_accuracy', ""),
-                            baro_accuracy=drone_info.get('baro_accuracy', ""),
-                            speed_accuracy=drone_info.get('speed_accuracy', ""),
-                            timestamp=drone_info.get('timestamp', ""),
-                            rid_timestamp=drone_info.get('rid_timestamp', ""),
-                            observed_at=time.time(),
-                            timestamp_accuracy=drone_info.get('timestamp_accuracy', ""),
-                            index=drone_info.get('index', 0),
-                            runtime=drone_info.get('runtime', 0),
-                            caa_id=drone_info.get('caa', ""),
-                            freq=drone_info.get('freq'),
-                            seen_by=KIT_ID
-                        )
-                        _apply_rid_lookup(drone, serial_number)
+                        drone = Drone(id=drone_info['id'], **_build_drone_update_kwargs(drone_info, KIT_ID))
+                        _apply_rid_lookup(drone, serial_number, drone_manager)
                         drone_manager.update_or_add_drone(drone_id, drone)
                         logger.debug(f"Added new drone: {drone_id}")
                 else:
                     # No primary serial broadcast present (CAA-only)
                     if 'mac' in drone_info and drone_info['mac']:
-                        updated = False
-                        for d in drone_manager.drone_dict.values():
-                            if d.mac == drone_info['mac']:
-                                d.update(
-                                    lat=drone_info.get('lat', 0.0),
-                                    lon=drone_info.get('lon', 0.0),
-                                    speed=drone_info.get('speed', 0.0),
-                                    vspeed=drone_info.get('vspeed', 0.0),
-                                    alt=drone_info.get('alt', 0.0),
-                                    height=drone_info.get('height', 0.0),
-                                    pilot_lat=drone_info.get('pilot_lat', 0.0),
-                                    pilot_lon=drone_info.get('pilot_lon', 0.0),
-                                    description=drone_info.get('description', ""),
-                                    mac=drone_info.get('mac', ""),
-                                    rssi=drone_info.get('rssi', 0),
-                                    home_lat=drone_info.get('home_lat', 0.0),
-                                    home_lon=drone_info.get('home_lon', 0.0),
-                                    id_type=drone_info.get('id_type', ""),
-                                    ua_type=drone_info.get('ua_type'),
-                                    ua_type_name=drone_info.get('ua_type_name', ""),
-                                    operator_id_type=drone_info.get('operator_id_type', ""),
-                                    operator_id=drone_info.get('operator_id', ""),
-                                    op_status=drone_info.get('op_status', ""),
-                                    height_type=drone_info.get('height_type', ""),
-                                    ew_dir=drone_info.get('ew_dir', ""),
-                                    direction=drone_info.get('direction'),
-                                    speed_multiplier=drone_info.get('speed_multiplier'),
-                                    pressure_altitude=drone_info.get('pressure_altitude'),
-                                    vertical_accuracy=drone_info.get('vertical_accuracy', ""),
-                                    horizontal_accuracy=drone_info.get('horizontal_accuracy', ""),
-                                    baro_accuracy=drone_info.get('baro_accuracy', ""),
-                                    speed_accuracy=drone_info.get('speed_accuracy', ""),
-                                    timestamp=drone_info.get('timestamp', ""),
-                                    rid_timestamp=drone_info.get('rid_timestamp', ""),
-                                    observed_at=time.time(),
-                                    timestamp_accuracy=drone_info.get('timestamp_accuracy', ""),
-                                    index=drone_info.get('index', 0),
-                                    runtime=drone_info.get('runtime', 0),
-                                    caa_id=drone_info.get('caa', ""),
-                                    freq=drone_info.get('freq'),
-                                    seen_by=KIT_ID
-                                )
-                                logger.debug(f"Updated existing drone with CAA info for MAC: {drone_info['mac']}")
-                                updated = True
-                                break
-                        if not updated:
+                        # Use O(1) MAC index lookup instead of O(n) linear search
+                        drone = drone_manager.get_drone_by_mac(drone_info['mac'])
+                        if drone:
+                            drone.update(**_build_drone_update_kwargs(drone_info, KIT_ID))
+                            logger.debug(f"Updated existing drone with CAA info for MAC: {drone_info['mac']}")
+                        else:
                             logger.debug(f"CAA-only message received for MAC {drone_info['mac']} but no matching drone record exists. Skipping for now.")
                     else:
                         logger.warning("CAA-only message received without a MAC. Skipping.")
@@ -811,24 +872,24 @@ def zmq_to_cot(
         logger.exception("Top-level error in zmq_to_cot — exiting for systemd restart")
         try:
             telemetry_socket.close(0)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to close telemetry socket: %s", e)
         try:
             if status_socket:
                 status_socket.close(0)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to close status socket: %s", e)
         try:
             if not context.closed:
                 context.term()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to terminate ZMQ context: %s", e)
         # ensure sinks shut down
         try:
             if 'drone_manager' in locals() and drone_manager:
                 drone_manager.close()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to close drone_manager on error: %s", e)
         sys.exit(1)
 
 # Configuration and Execution
@@ -842,7 +903,10 @@ if __name__ == "__main__":
     parser.add_argument("--tak-port", type=int, help="TAK server port (optional)")
     parser.add_argument("--tak-protocol", type=str, choices=['TCP', 'UDP'], help="TAK server communication protocol (TCP or UDP)")
     parser.add_argument("--tak-tls-p12", type=str, help="Path to TAK server TLS PKCS#12 file (optional, for TCP)")
-    parser.add_argument("--tak-tls-p12-pass", type=str, help="Password for TAK server TLS PKCS#12 file (optional, for TCP)")
+    parser.add_argument("--tak-tls-p12-pass", type=str, help="Password for TAK server TLS PKCS#12 file (optional, for TCP). Prefer env var TAK_TLS_P12_PASS")
+    parser.add_argument("--tak-tls-certfile", type=str, help="Path to TAK TLS client cert (PEM, optional, for TCP)")
+    parser.add_argument("--tak-tls-keyfile", type=str, help="Path to TAK TLS client key (PEM, optional, for TCP)")
+    parser.add_argument("--tak-tls-cafile", type=str, help="Path to TAK TLS CA file (PEM, optional, for TCP)")
     parser.add_argument("--tak-tls-skip-verify", action="store_true", help="(UNSAFE) Disable TLS server verification")
     parser.add_argument("--tak-multicast-addr", type=str, help="TAK multicast address (optional)")
     parser.add_argument("--tak-multicast-port", type=int, help="TAK multicast port (optional)")
@@ -851,7 +915,9 @@ if __name__ == "__main__":
     parser.add_argument("--multicast-ttl", type=int, help="TTL for multicast packets (default: 1)")
     parser.add_argument("--enable-receive", action="store_true", help="Enable receiving multicast CoT messages")
     parser.add_argument("--rate-limit", type=float, help="Rate limit for sending CoT messages (seconds)")
-    parser.add_argument("--max-drones", type=int, help="Maximum number of drones to track simultaneously")
+    parser.add_argument("--max-drones", type=int, help="Maximum number of drones to track simultaneously (legacy mode)")
+    parser.add_argument("--max-verified-drones", type=int, help="Maximum verified drones (passed FAA RID check, enables tiered mode)")
+    parser.add_argument("--max-unverified-drones", type=int, help="Maximum unverified drones (no RID or failed check, enables tiered mode)")
     parser.add_argument("--inactivity-timeout", type=float, help="Time in seconds before a drone is considered inactive")
     parser.add_argument("-d", "--debug", action="store_true", help="Enable debug logging")
     parser.add_argument("--mqtt-enabled", action="store_true", default=None,
@@ -922,6 +988,9 @@ if __name__ == "__main__":
         "tak_protocol": tak_protocol,
         "tak_tls_p12": args.tak_tls_p12 if args.tak_tls_p12 is not None else get_str(config_values.get("tak_tls_p12")),
         "tak_tls_p12_pass": args.tak_tls_p12_pass if args.tak_tls_p12_pass is not None else get_str(config_values.get("tak_tls_p12_pass")),
+        "tak_tls_certfile": args.tak_tls_certfile if args.tak_tls_certfile is not None else get_str(config_values.get("tak_tls_certfile")),
+        "tak_tls_keyfile": args.tak_tls_keyfile if args.tak_tls_keyfile is not None else get_str(config_values.get("tak_tls_keyfile")),
+        "tak_tls_cafile": args.tak_tls_cafile if args.tak_tls_cafile is not None else get_str(config_values.get("tak_tls_cafile")),
         "tak_tls_skip_verify": args.tak_tls_skip_verify if args.tak_tls_skip_verify else get_bool(config_values.get("tak_tls_skip_verify"), False),
         "api_enabled": get_bool(config_values.get("api_enabled"), True),
         "api_host": get_str(config_values.get("api_host", "0.0.0.0")),
@@ -930,7 +999,9 @@ if __name__ == "__main__":
         "tak_multicast_port": args.tak_multicast_port if args.tak_multicast_port is not None else get_int(config_values.get("tak_multicast_port"), None),
         "enable_multicast": args.enable_multicast or get_bool(config_values.get("enable_multicast"), False),
         "rate_limit": args.rate_limit if args.rate_limit is not None else get_float(config_values.get("rate_limit", 1.0)),
-        "max_drones": args.max_drones if args.max_drones is not None else get_int(config_values.get("max_drones", 30)),
+        "max_drones": args.max_drones if args.max_drones is not None else get_int(config_values.get("max_drones", 100)),
+        "max_verified_drones": args.max_verified_drones if args.max_verified_drones is not None else get_int(config_values.get("max_verified_drones"), None),
+        "max_unverified_drones": args.max_unverified_drones if args.max_unverified_drones is not None else get_int(config_values.get("max_unverified_drones"), None),
         "inactivity_timeout": args.inactivity_timeout if args.inactivity_timeout is not None else get_float(config_values.get("inactivity_timeout", 60.0)),
         "tak_multicast_interface": tak_multicast_interface,
         "multicast_ttl": args.multicast_ttl if args.multicast_ttl is not None else get_int(config_values.get("multicast_ttl", 1)),
@@ -952,6 +1023,10 @@ if __name__ == "__main__":
         "mqtt_ha_enabled": args.mqtt_ha_enabled if hasattr(args, "mqtt_ha_enabled") and args.mqtt_ha_enabled is not None else get_bool(config_values.get("mqtt_ha_enabled", False)),
         "mqtt_ha_prefix": args.mqtt_ha_prefix if hasattr(args, "mqtt_ha_prefix") and args.mqtt_ha_prefix is not None else get_str(config_values.get("mqtt_ha_prefix", "homeassistant")),
         "mqtt_ha_device_base": args.mqtt_ha_device_base if hasattr(args, "mqtt_ha_device_base") and args.mqtt_ha_device_base is not None else get_str(config_values.get("mqtt_ha_device_base", "wardragon_drone")),
+        "mqtt_signals_enabled": get_bool(config_values.get("mqtt_signals_enabled", False)),
+        "mqtt_signals_topic": get_str(config_values.get("mqtt_signals_topic", "wardragon/signals")),
+        "mqtt_ha_signal_tracker": get_bool(config_values.get("mqtt_ha_signal_tracker", False)),
+        "mqtt_ha_signal_id": get_str(config_values.get("mqtt_ha_signal_id", "signal_latest")),
 
         # ---- Kismet (optional) config ----
         "kismet_enabled": get_bool(config_values.get("kismet_enabled"), False),
@@ -991,6 +1066,17 @@ if __name__ == "__main__":
         "adsb_rate_limit": get_float(config_values.get("adsb_rate_limit", 3.0)),
         "adsb_min_alt": get_int(config_values.get("adsb_min_alt", 0)),
         "adsb_max_alt": get_int(config_values.get("adsb_max_alt", 0)),
+
+        # ---- FPV signal ingest (optional) ----
+        "fpv_enabled": get_bool(config_values.get("fpv_enabled"), False),
+        "fpv_zmq_host": get_str(config_values.get("fpv_zmq_host", "127.0.0.1")),
+        "fpv_zmq_port": get_int(config_values.get("fpv_zmq_port", 4226)),
+        "fpv_stale": get_float(config_values.get("fpv_stale", 60.0)),
+        "fpv_radius_m": get_float(config_values.get("fpv_radius_m", 15.0)),
+        "fpv_rate_limit": get_float(config_values.get("fpv_rate_limit", 2.0)),
+        "fpv_max_signals": get_int(config_values.get("fpv_max_signals", 200)),
+        "fpv_confirm_only": get_bool(config_values.get("fpv_confirm_only", True)),
+
         # FAA RID API fallback (disabled by default; local DB still used)
         "rid_api_enabled": get_bool(config_values.get("rid_api_enabled"), False),
     }
@@ -1024,7 +1110,10 @@ if __name__ == "__main__":
                 "enable_receive": bool(config.get("enable_receive")),
                 "multicast_interface": config.get("tak_multicast_interface"),
                 "multicast_ttl": config.get("multicast_ttl"),
-                "tls": bool(config.get("tak_tls_p12")),
+                "tls": bool(
+                    config.get("tak_tls_p12")
+                    or (config.get("tak_tls_certfile") and config.get("tak_tls_keyfile"))
+                ),
             }
             cfg["api"] = {
                 "enabled": bool(config.get("api_enabled", True)),
@@ -1045,6 +1134,10 @@ if __name__ == "__main__":
                 "per_drone_base": config.get("mqtt_per_drone_base"),
                 "ha_enabled": bool(config.get("mqtt_ha_enabled")),
                 "ha_prefix": config.get("mqtt_ha_prefix"),
+                "signals_enabled": bool(config.get("mqtt_signals_enabled")),
+                "signals_topic": config.get("mqtt_signals_topic"),
+                "ha_signal_tracker": bool(config.get("mqtt_ha_signal_tracker")),
+                "ha_signal_id": config.get("mqtt_ha_signal_id"),
             }
             cfg["adsb"] = {
                 "enabled": bool(config.get("adsb_enabled")),
@@ -1056,6 +1149,16 @@ if __name__ == "__main__":
                 "min_alt": config.get("adsb_min_alt"),
                 "max_alt": config.get("adsb_max_alt"),
             }
+            cfg["fpv"] = {
+                "enabled": bool(config.get("fpv_enabled")),
+                "zmq_host": config.get("fpv_zmq_host"),
+                "zmq_port": config.get("fpv_zmq_port"),
+                "stale": config.get("fpv_stale"),
+                "radius_m": config.get("fpv_radius_m"),
+                "rate_limit": config.get("fpv_rate_limit"),
+                "max_signals": config.get("fpv_max_signals"),
+                "confirm_only": bool(config.get("fpv_confirm_only")),
+            }
             cfg["lattice"] = {
                 "enabled": bool(config.get("lattice_enabled")),
                 "base_url": config.get("lattice_base_url") or config.get("lattice_endpoint"),
@@ -1063,8 +1166,8 @@ if __name__ == "__main__":
                 "drone_rate": config.get("lattice_drone_rate"),
                 "wardragon_rate": config.get("lattice_wd_rate"),
             }
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to parse advanced config sections: %s", e)
         return cfg
 
 
@@ -1072,13 +1175,19 @@ if __name__ == "__main__":
     tak_tls_context = setup_tls_context(
         tak_tls_p12=config["tak_tls_p12"],
         tak_tls_p12_pass=config["tak_tls_p12_pass"],
-        tak_tls_skip_verify=config["tak_tls_skip_verify"]
-    ) if config["tak_protocol"] == 'TCP' and config["tak_tls_p12"] else None
+        tak_tls_certfile=config.get("tak_tls_certfile"),
+        tak_tls_keyfile=config.get("tak_tls_keyfile"),
+        tak_tls_cafile=config.get("tak_tls_cafile"),
+        tak_tls_skip_verify=config["tak_tls_skip_verify"],
+    ) if config["tak_protocol"] == 'TCP' and (
+        config["tak_tls_p12"]
+        or (config.get("tak_tls_certfile") and config.get("tak_tls_keyfile"))
+    ) else None
 
     # MQTT sink (optional)
     mqtt_sink = None
     try:
-        from mqtt_sink import MqttSink  # your existing helper
+        from sinks.mqtt_sink import MqttSink  # your existing helper
     except Exception as e:
         MqttSink = None  # keep running even if not present
         if config.get("mqtt_enabled"):
@@ -1100,9 +1209,15 @@ if __name__ == "__main__":
                 retain_state=bool(config.get("mqtt_retain", True)),
                 per_drone_enabled=bool(config.get("mqtt_per_drone_enabled", False)),
                 per_drone_base=config.get("mqtt_per_drone_base", "wardragon/drone"),
+                signals_enabled=bool(config.get("mqtt_signals_enabled", False)),
+                signals_topic=config.get("mqtt_signals_topic", "wardragon/signals"),
                 ha_enabled=bool(config.get("mqtt_ha_enabled", False)),
                 ha_prefix=config.get("mqtt_ha_prefix", "homeassistant"),
                 ha_device_base=config.get("mqtt_ha_device_base", "wardragon_drone"),
+                ha_signal_tracker=bool(config.get("mqtt_ha_signal_tracker", False)),
+                ha_signal_id=config.get("mqtt_ha_signal_id", "signal_latest"),
+                aircraft_enabled=bool(config.get("mqtt_aircraft_enabled", False)),
+                aircraft_topic=config.get("mqtt_aircraft_topic", "wardragon/aircraft"),
             )
             logger.info("MQTT sink enabled.")
         except Exception as e:
@@ -1113,7 +1228,7 @@ if __name__ == "__main__":
     lattice_sink = None
     if config["lattice_enabled"]:
         try:
-            from lattice_sink import LatticeSink  # local helper that wraps the Lattice SDK
+            from sinks.lattice_sink import LatticeSink  # local helper that wraps the Lattice SDK
         except Exception as e:
             logger.warning(f"Lattice enabled, but lattice_sink import failed: {e}")
             LatticeSink = None  # type: ignore
@@ -1164,12 +1279,4 @@ if __name__ == "__main__":
         enable_receive=config["enable_receive"],
         lattice_sink=lattice_sink,
         mqtt_sink=mqtt_sink,
-        adsb_enabled=config["adsb_enabled"],
-        adsb_json_url=config["adsb_json_url"],
-        adsb_uid_prefix=config["adsb_uid_prefix"],
-        adsb_cot_stale=config["adsb_cot_stale"],
-        adsb_cache_ttl=config["adsb_cache_ttl"],
-        adsb_rate_limit=config["adsb_rate_limit"],
-        adsb_min_alt=config["adsb_min_alt"],
-        adsb_max_alt=config["adsb_max_alt"],
     )

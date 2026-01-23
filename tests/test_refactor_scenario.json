@@ -1,0 +1,331 @@
+{
+  "description": "Generated drone scenario centered at (39.739200, -104.990300)",
+  "scenarios": {
+    "static_detections": [],
+    "animated_tracks": [
+      {
+        "name": "DJI Phantom 4 - Grid Pattern",
+        "description": "Drone following grid pattern at 15.3 m/s, 320 ft AGL",
+        "drone_config": {
+          "Basic ID": {
+            "id_type": "Serial Number (ANSI/CTA-2063-A)",
+            "id": "P4P2024NVYI0PG0Y",
+            "ua_type": 2,
+            "MAC": "60:60:1F:2E:67:72",
+            "RSSI": -72
+          },
+          "frequency": 2437000000.0,
+          "self_id_text": "DJI Phantom 4 Flight",
+          "operator_id_type": "Operator ID",
+          "operator_id": "OP-2024-US-58835",
+          "pilot_location": {
+            "latitude": 39.73121091380501,
+            "longitude": -104.98733088284959
+          },
+          "home_location": {
+            "latitude": 39.73147734847962,
+            "longitude": -104.987302766723
+          }
+        },
+        "flight_path": {
+          "cruise_speed": 15.264775863361152,
+          "cruise_altitude": 97.536,
+          "altitude_agl": 73.152,
+          "waypoints": [
+            {
+              "latitude": 39.73147734847962,
+              "longitude": -104.987302766723,
+              "altitude": 97.536,
+              "dwell_time": 2.0,
+              "description": "Grid start - Home"
+            },
+            {
+              "latitude": 39.73147734847962,
+              "longitude": -104.987302766723,
+              "altitude": 97.536,
+              "dwell_time": 1.0,
+              "description": "Grid row 1 start"
+            },
+            {
+              "latitude": 39.736863118141166,
+              "longitude": -105.00166485338565,
+              "altitude": 97.536,
+              "dwell_time": 1.0,
+              "description": "Grid row 1 end"
+            },
+            {
+              "latitude": 39.73730769686858,
+              "longitude": -105.00138299098563,
+              "altitude": 97.536,
+              "dwell_time": 1.0,
+              "description": "Grid row 2 start"
+            },
+            {
+              "latitude": 39.73192015761351,
+              "longitude": -104.98702193420614,
+              "altitude": 97.536,
+              "dwell_time": 1.0,
+              "description": "Grid row 2 end"
+            },
+            {
+              "latitude": 39.73236650528031,
+              "longitude": -104.98673885300214,
+              "altitude": 97.536,
+              "dwell_time": 1.0,
+              "description": "Grid row 3 start"
+            },
+            {
+              "latitude": 39.73775227491392,
+              "longitude": -105.00110112495072,
+              "altitude": 97.536,
+              "dwell_time": 1.0,
+              "description": "Grid row 3 end"
+            },
+            {
+              "latitude": 39.73819685227717,
+              "longitude": -105.00081925528082,
+              "altitude": 97.536,
+              "dwell_time": 1.0,
+              "description": "Grid row 4 start"
+            },
+            {
+              "latitude": 39.73280931299417,
+              "longitude": -104.98645801326147,
+              "altitude": 97.536,
+              "dwell_time": 1.0,
+              "description": "Grid row 4 end"
+            },
+            {
+              "latitude": 39.73325565935266,
+              "longitude": -104.9861749247336,
+              "altitude": 97.536,
+              "dwell_time": 1.0,
+              "description": "Grid row 5 start"
+            },
+            {
+              "latitude": 39.738641428958324,
+              "longitude": -105.0005373819758,
+              "altitude": 97.536,
+              "dwell_time": 1.0,
+              "description": "Grid row 5 end"
+            },
+            {
+              "latitude": 39.73147734847962,
+              "longitude": -104.987302766723,
+              "altitude": 97.536,
+              "dwell_time": 3.0,
+              "description": "Return to home"
+            }
+          ],
+          "loop": true
+        }
+      },
+      {
+        "name": "DJI Mavic 3 - Circular Pattern",
+        "description": "Drone following circular pattern at 19.2 m/s, 158 ft AGL",
+        "drone_config": {
+          "Basic ID": {
+            "id_type": "Serial Number (ANSI/CTA-2063-A)",
+            "id": "1581F6BVYAHSVXLM",
+            "ua_type": 2,
+            "MAC": "60:60:1F:D7:4F:E4",
+            "RSSI": -62
+          },
+          "frequency": 5825000000.0,
+          "self_id_text": "DJI Mavic 3 Flight",
+          "operator_id_type": "Operator ID",
+          "operator_id": "OP-2024-US-74047",
+          "pilot_location": {
+            "latitude": 39.74635985657948,
+            "longitude": -104.98371246966086
+          },
+          "home_location": {
+            "latitude": 39.74619614716471,
+            "longitude": -104.98359888826326
+          }
+        },
+        "flight_path": {
+          "cruise_speed": 19.22878066609097,
+          "cruise_altitude": 48.1584,
+          "altitude_agl": 36.1188,
+          "waypoints": [
+            {
+              "latitude": 39.74619614716471,
+              "longitude": -104.98359888826326,
+              "altitude": 48.1584,
+              "dwell_time": 2.0,
+              "description": "Circular pattern start - Home"
+            },
+            {
+              "latitude": 39.74242141137868,
+              "longitude": -104.98325561067226,
+              "altitude": 48.1584,
+              "dwell_time": 1.5,
+              "description": "Circle point 1 (176\u00b0)"
+            },
+            {
+              "latitude": 39.74298714402092,
+              "longitude": -104.98620668782968,
+              "altitude": 48.1584,
+              "dwell_time": 0.5,
+              "description": "Circle point 2 (212\u00b0)"
+            },
+            {
+              "latitude": 39.74477856417445,
+              "longitude": -104.98816179563589,
+              "altitude": 48.1584,
+              "dwell_time": 0.5,
+              "description": "Circle point 3 (248\u00b0)"
+            },
+            {
+              "latitude": 39.747111470371706,
+              "longitude": -104.98837412179498,
+              "altitude": 48.1584,
+              "dwell_time": 0.5,
+              "description": "Circle point 4 (284\u00b0)"
+            },
+            {
+              "latitude": 39.74909478024535,
+              "longitude": -104.98676240761634,
+              "altitude": 48.1584,
+              "dwell_time": 1.5,
+              "description": "Circle point 5 (320\u00b0)"
+            },
+            {
+              "latitude": 39.74997088193953,
+              "longitude": -104.98394220346975,
+              "altitude": 48.1584,
+              "dwell_time": 0.5,
+              "description": "Circle point 6 (356\u00b0)"
+            },
+            {
+              "latitude": 39.74940509195167,
+              "longitude": -104.98099084577227,
+              "altitude": 48.1584,
+              "dwell_time": 0.5,
+              "description": "Circle point 7 (32\u00b0)"
+            },
+            {
+              "latitude": 39.74761355150458,
+              "longitude": -104.97903579313952,
+              "altitude": 48.1584,
+              "dwell_time": 0.5,
+              "description": "Circle point 8 (68\u00b0)"
+            },
+            {
+              "latitude": 39.74528062830743,
+              "longitude": -104.97882378161955,
+              "altitude": 48.1584,
+              "dwell_time": 1.5,
+              "description": "Circle point 9 (104\u00b0)"
+            },
+            {
+              "latitude": 39.74329742822084,
+              "longitude": -104.9804356350824,
+              "altitude": 48.1584,
+              "dwell_time": 0.5,
+              "description": "Circle point 10 (140\u00b0)"
+            },
+            {
+              "latitude": 39.74619614716471,
+              "longitude": -104.98359888826326,
+              "altitude": 48.1584,
+              "dwell_time": 3.0,
+              "description": "Return to home"
+            }
+          ],
+          "loop": true
+        }
+      },
+      {
+        "name": "Skydio X2 - Point-to-Point Pattern",
+        "description": "Drone following point-to-point pattern at 13.0 m/s, 273 ft AGL",
+        "drone_config": {
+          "Basic ID": {
+            "id_type": "Serial Number (ANSI/CTA-2063-A)",
+            "id": "SKY2024X2P1OR2AJ",
+            "ua_type": 2,
+            "MAC": "B8:27:EB:CD:FF:28",
+            "RSSI": -63
+          },
+          "frequency": 2437000000.0,
+          "self_id_text": "Skydio X2 Flight",
+          "operator_id_type": "Operator ID",
+          "operator_id": "OP-2024-US-49769",
+          "pilot_location": {
+            "latitude": 39.73071689806906,
+            "longitude": -105.00414619723207
+          },
+          "home_location": {
+            "latitude": 39.730730504893316,
+            "longitude": -105.00386491669401
+          }
+        },
+        "flight_path": {
+          "cruise_speed": 13.035559237617619,
+          "cruise_altitude": 83.2104,
+          "altitude_agl": 62.40780000000001,
+          "waypoints": [
+            {
+              "latitude": 39.730730504893316,
+              "longitude": -105.00386491669401,
+              "altitude": 83.2104,
+              "dwell_time": 2.0,
+              "description": "Point-to-point start - Home"
+            },
+            {
+              "latitude": 39.73075964638726,
+              "longitude": -105.00169254728871,
+              "altitude": 83.2104,
+              "dwell_time": 0.519186475831196,
+              "description": "Waypoint 1"
+            },
+            {
+              "latitude": 39.73131752112514,
+              "longitude": -104.99989705657839,
+              "altitude": 83.2104,
+              "dwell_time": 1.1146468591552894,
+              "description": "Waypoint 2"
+            },
+            {
+              "latitude": 39.73102839008132,
+              "longitude": -104.99826867202523,
+              "altitude": 83.2104,
+              "dwell_time": 1.1051885859572579,
+              "description": "Waypoint 3"
+            },
+            {
+              "latitude": 39.73051952870983,
+              "longitude": -104.9969120739324,
+              "altitude": 83.2104,
+              "dwell_time": 1.6042688487912087,
+              "description": "Destination 4"
+            },
+            {
+              "latitude": 39.73058985410432,
+              "longitude": -104.99922968818628,
+              "altitude": 83.2104,
+              "dwell_time": 0.5,
+              "description": "Return waypoint 1"
+            },
+            {
+              "latitude": 39.73066017949882,
+              "longitude": -105.00154730244014,
+              "altitude": 83.2104,
+              "dwell_time": 0.5,
+              "description": "Return waypoint 2"
+            },
+            {
+              "latitude": 39.730730504893316,
+              "longitude": -105.00386491669401,
+              "altitude": 83.2104,
+              "dwell_time": 3.0,
+              "description": "Return to home"
+            }
+          ],
+          "loop": true
+        }
+      }
+    ]
+  }
+}

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Copyright 2025 cemaxecuter
+Copyright 2025-2026 CEMAXECUTER LLC.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -134,13 +134,23 @@ def validate_config(config: Dict[str, Any]):
         # Validate TAK protocol-specific configurations
         if tak_protocol == 'TCP':
             tak_tls_p12 = config.get('tak_tls_p12')
-            tak_tls_p12_pass = config.get('tak_tls_p12_pass')
-            if not tak_tls_p12 or not tak_tls_p12_pass:
-                raise ValueError("TAK protocol is set to TCP but 'tak_tls_p12' or 'tak_tls_p12_pass' is missing.")
+            tak_tls_certfile = config.get('tak_tls_certfile')
+            tak_tls_keyfile = config.get('tak_tls_keyfile')
+            if not tak_tls_p12 and not (tak_tls_certfile and tak_tls_keyfile):
+                raise ValueError(
+                    "TAK protocol is set to TCP but no TLS credentials were provided. "
+                    "Set 'tak_tls_p12' or both 'tak_tls_certfile' and 'tak_tls_keyfile'."
+                )
         elif tak_protocol == 'UDP':
-            # For UDP, tak_tls_p12 and tak_tls_p12_pass should not be set
-            if config.get('tak_tls_p12') or config.get('tak_tls_p12_pass'):
-                logger.warning("TAK protocol is set to UDP. 'tak_tls_p12' and 'tak_tls_p12_pass' will be ignored.")
+            # For UDP, TLS fields should not be set
+            if (
+                config.get('tak_tls_p12')
+                or config.get('tak_tls_p12_pass')
+                or config.get('tak_tls_certfile')
+                or config.get('tak_tls_keyfile')
+                or config.get('tak_tls_cafile')
+            ):
+                logger.warning("TAK protocol is set to UDP. TLS fields will be ignored.")
     else:
         # If tak_host and tak_port are not both provided, ignore tak_protocol
         config['tak_protocol'] = None
@@ -171,3 +181,60 @@ def validate_config(config: Dict[str, Any]):
     # Ensure consistency between tak_host and tak_port
     if (tak_host and not tak_port) or (tak_port and not tak_host):
         raise ValueError("Both 'tak_host' and 'tak_port' must be provided together.")
+
+    # Validate MQTT configurations if enabled
+    mqtt_enabled = get_bool(config.get('mqtt_enabled', False))
+    if mqtt_enabled:
+        mqtt_port = get_int(config.get('mqtt_port'))
+        if mqtt_port is not None and not (1 <= mqtt_port <= 65535):
+            raise ValueError(f"Invalid MQTT port: {mqtt_port}. Must be between 1 and 65535.")
+
+    # Validate API configurations if enabled
+    api_enabled = get_bool(config.get('api_enabled', False))
+    if api_enabled:
+        api_port = get_int(config.get('api_port'))
+        if api_port is not None and not (1 <= api_port <= 65535):
+            raise ValueError(f"Invalid API port: {api_port}. Must be between 1 and 65535.")
+
+    # Validate drone tracking limits
+    max_drones = get_int(config.get('max_drones'))
+    if max_drones is not None and max_drones <= 0:
+        raise ValueError(f"Invalid max_drones: {max_drones}. Must be greater than 0.")
+
+    # Validate two-tier mode consistency
+    max_verified = get_int(config.get('max_verified_drones'))
+    max_unverified = get_int(config.get('max_unverified_drones'))
+    if max_verified is not None and max_unverified is not None:
+        if max_verified <= 0:
+            raise ValueError(f"Invalid max_verified_drones: {max_verified}. Must be greater than 0.")
+        if max_unverified <= 0:
+            raise ValueError(f"Invalid max_unverified_drones: {max_unverified}. Must be greater than 0.")
+        if max_drones is not None:
+            total = max_verified + max_unverified
+            if total != max_drones:
+                raise ValueError(
+                    f"Two-tier mode inconsistency: max_verified_drones ({max_verified}) + "
+                    f"max_unverified_drones ({max_unverified}) = {total}, but max_drones = {max_drones}. "
+                    f"They must be equal."
+                )
+
+    # Validate rate limits
+    if 'rate_limit' in config and config.get('rate_limit'):
+        rate_limit = get_float(config.get('rate_limit'))
+        if rate_limit <= 0:
+            raise ValueError(f"Invalid rate_limit: {rate_limit}. Must be greater than 0.")
+
+    # Validate inactivity timeout
+    if 'inactivity_timeout' in config and config.get('inactivity_timeout'):
+        inactivity_timeout = get_float(config.get('inactivity_timeout'))
+        if inactivity_timeout <= 0:
+            raise ValueError(f"Invalid inactivity_timeout: {inactivity_timeout}. Must be greater than 0.")
+
+    # Validate ADS-B altitude filters
+    adsb_min_alt = get_int(config.get('adsb_min_alt', 0))
+    adsb_max_alt = get_int(config.get('adsb_max_alt', 0))
+    if adsb_min_alt and adsb_max_alt and adsb_min_alt >= adsb_max_alt:
+        raise ValueError(
+            f"Invalid ADS-B altitude range: min_alt ({adsb_min_alt}) must be less than "
+            f"max_alt ({adsb_max_alt})."
+        )

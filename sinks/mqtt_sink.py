@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Copyright 2025 cemaxecuter
+Copyright 2025-2026 CEMAXECUTER LLC.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -71,6 +71,16 @@ class MqttSink:
         per_drone_enabled: bool = False,
         per_drone_base: str = "wardragon/drone",
         retain_state: bool = False,
+        # Signals (optional)
+        signals_enabled: bool = False,
+        signals_topic: str = "wardragon/signals",
+        # Aircraft (optional)
+        aircraft_enabled: bool = False,
+        aircraft_topic: str = "wardragon/aircraft",
+        # HA signal tracker (optional)
+        ha_signal_tracker: bool = False,
+        ha_signal_base: str = "wardragon_signal",
+        ha_signal_id: str = "signal_latest",
         # Home Assistant
         ha_enabled: bool = False,
         ha_prefix: str = "homeassistant",
@@ -86,12 +96,23 @@ class MqttSink:
         self.per_drone_enabled = bool(per_drone_enabled)
         self.per_drone_base = per_drone_base.strip().strip("/")
 
+        self.signals_enabled = bool(signals_enabled)
+        self.signals_topic = signals_topic.strip().strip("/") if signals_topic else ""
+        self._signal_state_topic = ""
+
+        self.aircraft_enabled = bool(aircraft_enabled)
+        self.aircraft_topic = aircraft_topic.strip().strip("/") if aircraft_topic else ""
+
         self.ha_enabled = bool(ha_enabled)
         self.ha_prefix = ha_prefix.strip().strip("/")
         self.ha_device_base = ha_device_base.strip()
+        self.ha_signal_tracker = bool(ha_signal_tracker)
+        self.ha_signal_base = ha_signal_base.strip()
+        self.ha_signal_id = ha_signal_id.strip()
 
         self._seen_for_ha: set[str] = set()
         self._state_cache: Dict[str, Dict[str, Any]] = {}
+        self._ha_signal_announced: set[str] = set()
 
         # system device (WarDragon kit) tracking
         self._ha_system_announced = False
@@ -296,6 +317,11 @@ class MqttSink:
                 self.client.publish("wardragon/service/availability", "offline", qos=self.qos, retain=True)
             except Exception:
                 pass
+            if self.signals_topic:
+                try:
+                    self.client.publish(f"{self.signals_topic}/availability", "offline", qos=self.qos, retain=True)
+                except Exception:
+                    pass
             self.client.loop_stop()
         except Exception as e:
             _log.warning("MqttSink loop_stop error: %s", e)
@@ -349,6 +375,56 @@ class MqttSink:
             except Exception as e:
                 _log.warning("Per-drone publish failed for %s: %s", drone_id, e)
 
+    def publish_signal(self, signal: Dict[str, Any]) -> None:
+        """
+        Publish a signal alert payload (e.g., FPV) to a dedicated topic.
+        """
+        if not self.signals_enabled or not self.signals_topic:
+            return
+        try:
+            state = self._signal_to_state(signal)
+            payload = json.dumps(state, default=_json_default)
+            info = self.client.publish(
+                self.signals_topic, payload, qos=self.qos, retain=self.retain_state
+            )
+            self._warn_if_publish_failed(info)
+            if self.ha_enabled and self.ha_signal_tracker:
+                seen_by = state.get("seen_by") or "unknown"
+                subtopic = self._signal_topic_for_seen_by(seen_by)
+                self._ensure_ha_signal_tracker(seen_by, subtopic)
+                self.client.publish(subtopic, payload, qos=self.qos, retain=self.retain_state)
+                self.client.publish(
+                    f"{subtopic}/state",
+                    "not_home",
+                    qos=self.qos,
+                    retain=self.retain_state,
+                )
+                self.client.publish(
+                    f"{subtopic}/availability",
+                    "online",
+                    qos=self.qos,
+                    retain=True,
+                )
+        except Exception as e:
+            _log.warning("Signal publish failed: %s", e)
+
+    def publish_aircraft(self, aircraft: Dict[str, Any]) -> None:
+        """
+        Publish ADS-B aircraft to MQTT aggregate topic only.
+        No per-aircraft topics or HA discovery (would overwhelm system with 100+ aircraft).
+        """
+        if not self.aircraft_enabled or not self.aircraft_topic:
+            return
+        try:
+            state = self._aircraft_to_state(aircraft)
+            payload = json.dumps(state, default=_json_default)
+            info = self.client.publish(
+                self.aircraft_topic, payload, qos=self.qos, retain=False  # Don't retain aircraft
+            )
+            self._warn_if_publish_failed(info)
+        except Exception as e:
+            _log.warning("Aircraft publish failed: %s", e)
+
     def _warn_if_publish_failed(self, info) -> None:
         try:
             rc = getattr(info, "rc", None)
@@ -360,6 +436,69 @@ class MqttSink:
     def _per_drone_topic(self, drone_id: str) -> str:
         return f"{self.per_drone_base}/{drone_id}"
 
+    def _signal_to_state(self, sig: Dict[str, Any]) -> Dict[str, Any]:
+        lat = _f(sig.get("lat", 0.0))
+        lon = _f(sig.get("lon", 0.0))
+        state = {
+            "uid": sig.get("uid"),
+            "signal_type": sig.get("signal_type", "fpv"),
+            "source": sig.get("source"),
+            "callsign": sig.get("callsign"),
+            "description": sig.get("description"),
+            "center_hz": _f_or_none(sig.get("center_hz")),
+            "bandwidth_hz": _f_or_none(sig.get("bandwidth_hz")),
+            "pal": _f_or_none(sig.get("pal_conf")),
+            "ntsc": _f_or_none(sig.get("ntsc_conf")),
+            "sensor_lat": _f_or_none(sig.get("sensor_lat")),
+            "sensor_lon": _f_or_none(sig.get("sensor_lon")),
+            "sensor_alt": _f_or_none(sig.get("sensor_alt")),
+            "lat": lat,
+            "lon": lon,
+            "alt": _f(sig.get("alt", 0.0)),
+            "latitude": lat,
+            "longitude": lon,
+            "gps_accuracy": _f(sig.get("radius_m", 0.0)),
+            "radius_m": _f(sig.get("radius_m", 0.0)),
+            "seen_by": sig.get("seen_by"),
+            "observed_at": sig.get("observed_at", None),
+        }
+        return state
+
+    def _aircraft_to_state(self, aircraft: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert ADS-B aircraft dict to MQTT state payload."""
+        lat = _f(aircraft.get("lat", 0.0))
+        lon = _f(aircraft.get("lon", 0.0))
+
+        # Get altitude (prefer geometric, fallback to barometric)
+        alt = aircraft.get("alt_geom")
+        if alt is None:
+            alt = aircraft.get("alt_baro", 0)
+
+        state = {
+            "icao": aircraft.get("hex", "").strip().upper(),
+            "callsign": (aircraft.get("flight") or "").strip(),
+            "registration": aircraft.get("reg", ""),
+            "lat": lat,
+            "lon": lon,
+            "latitude": lat,
+            "longitude": lon,
+            "alt": _f(alt),
+            "altitude_ft": _f(alt),
+            "speed": _f(aircraft.get("gs", 0.0)),  # Ground speed in knots
+            "speed_kt": _f(aircraft.get("gs", 0.0)),
+            "track": _f(aircraft.get("track", 0.0)),  # True track
+            "heading": _f(aircraft.get("track", 0.0)),
+            "vertical_rate": _f_or_none(aircraft.get("baro_rate")),
+            "squawk": aircraft.get("squawk", ""),
+            "category": aircraft.get("category", ""),
+            "on_ground": bool(aircraft.get("onground") or aircraft.get("OnGround", False)),
+            "nac_p": _f_or_none(aircraft.get("nac_p") or aircraft.get("NACp")),
+            "nac_v": _f_or_none(aircraft.get("nac_v") or aircraft.get("NACv")),
+            "seen_by": aircraft.get("seen_by"),
+            "track_type": "aircraft",
+        }
+        return state
+
     def _availability_topics(self, drone_id: str):
         base = self._per_drone_topic(drone_id)
         return (
@@ -367,6 +506,38 @@ class MqttSink:
             f"{base}/pilot_availability", # pilot tracker
             f"{base}/home_availability",  # home tracker
         )
+
+    def _signal_topic_for_seen_by(self, seen_by: str) -> str:
+        safe = _slugify(seen_by)
+        return f"{self.signals_topic}/{safe}"
+
+    def _ensure_ha_signal_tracker(self, seen_by: str, attr_topic: str) -> None:
+        if not self.signals_topic:
+            return
+        safe = _slugify(seen_by)
+        base_unique = f"{self.ha_signal_base}_{self.ha_signal_id}_{safe}"
+        if base_unique in self._ha_signal_announced:
+            return
+        device = {
+            "identifiers": [f"{self.ha_signal_base}:{self.ha_signal_id}:{safe}"],
+            "name": f"Signal Alert ({seen_by})",
+        }
+        cfg_topic = f"{self.ha_prefix}/device_tracker/{base_unique}/config"
+        state_topic = f"{attr_topic}/state"
+        payload = {
+            "name": f"Signal Alert ({seen_by})",
+            "unique_id": base_unique,
+            "device": device,
+            "source_type": "gps",
+            "state_topic": state_topic,
+            "json_attributes_topic": attr_topic,
+            "icon": "mdi:radio-tower",
+            "availability_topic": f"{attr_topic}/availability",
+            "payload_available": "online",
+            "payload_not_available": "offline",
+        }
+        self.client.publish(cfg_topic, json.dumps(payload), qos=self.qos, retain=True)
+        self._ha_signal_announced.add(base_unique)
 
     def _drone_to_state(self, d: Any) -> Dict[str, Any]:
         """
@@ -724,6 +895,15 @@ def _fmt_freq_mhz(freq: Any) -> Optional[float]:
     if f > 1e5:  # looks like Hz
         f = f / 1e6
     return round(f, 3)
+
+def _slugify(val: str) -> str:
+    safe = []
+    for ch in val:
+        if ch.isalnum() or ch in ("-", "_"):
+            safe.append(ch)
+        else:
+            safe.append("_")
+    return "".join(safe).strip("_") or "unknown"
 
 def _tail_of_drone_id(drone_id: str) -> str:
     """Return 'XYZ' from 'drone-XYZ' (or the original string if it lacks the prefix)."""

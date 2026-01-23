@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Copyright 2025 cemaxecuter
+Copyright 2025-2026 CEMAXECUTER LLC.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ Minimal read-only HTTP API for DragonSync/WarDragon.
 Endpoints:
   GET /status   -> system health and kit info
   GET /drones   -> list of drone/aircraft tracks (from DroneManager)
+  GET /signals  -> list of signal alerts (from SignalManager)
   GET /update/check -> git update availability (read-only)
 
 Notes:
@@ -34,11 +35,16 @@ Notes:
 import json
 import logging
 import os
+import time
+from collections import defaultdict
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
 from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
+
+# Rate limiting: track request times per IP address
+_request_times: Dict[str, List[float]] = defaultdict(list)
 
 
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
@@ -47,6 +53,7 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
 
 class APIServer(BaseHTTPRequestHandler):
     manager = None
+    signal_manager = None
     system_status_provider = None  # callable -> obj or obj directly
     kit_id_provider = None  # callable -> str
     config_provider = None  # callable -> dict (sanitized)
@@ -66,11 +73,42 @@ class APIServer(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _rate_limit_check(self, max_requests: int = 100, window: int = 60) -> bool:
+        """
+        Check if client IP has exceeded rate limit.
+        Default: 100 requests per 60 seconds per IP.
+        Returns True if request allowed, False if rate limited.
+        """
+        client_ip = self.client_address[0]
+        now = time.time()
+
+        # Clean up old request times outside the window
+        _request_times[client_ip] = [t for t in _request_times[client_ip] if now - t < window]
+
+        # Check if limit exceeded
+        if len(_request_times[client_ip]) >= max_requests:
+            logger.warning(f"Rate limit exceeded for {client_ip}: {len(_request_times[client_ip])} requests in {window}s")
+            return False
+
+        # Record this request
+        _request_times[client_ip].append(now)
+        return True
+
     def do_GET(self) -> None:
+        # Rate limiting check
+        if not self._rate_limit_check():
+            self.send_response(429)  # Too Many Requests
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Retry-After", "60")
+            self.end_headers()
+            self.wfile.write(b'{"error": "rate limit exceeded"}')
+            return
         if self.path.startswith("/status"):
             self._handle_status()
         elif self.path.startswith("/drones"):
             self._handle_drones()
+        elif self.path.startswith("/signals"):
+            self._handle_signals()
         elif self.path.startswith("/config"):
             self._handle_config()
         elif self.path.startswith("/update/check"):
@@ -118,6 +156,18 @@ class APIServer(BaseHTTPRequestHandler):
             return
         self._write_json({"drones": drones})
 
+    def _handle_signals(self) -> None:
+        if self.signal_manager is None:
+            self._write_json({"error": "signal manager unavailable"}, status=503)
+            return
+        try:
+            signals: List[Dict[str, Any]] = self.signal_manager.export_signals()
+        except Exception as e:
+            logger.error("API signal export failed: %s", e)
+            self._write_json({"error": "signals unavailable"}, status=500)
+            return
+        self._write_json({"signals": signals})
+
     def _handle_config(self) -> None:
         if self.__class__.config_provider is None:
             self._write_json({"error": "config unavailable"}, status=503)
@@ -147,6 +197,7 @@ class APIServer(BaseHTTPRequestHandler):
 
 
 def serve_api(manager, system_status_provider, kit_id_provider, config_provider=None, update_check_provider=None,
+              signal_manager=None,
               host: str = None, port: int = None):
     """
     Start the API server in a background thread.
@@ -154,6 +205,7 @@ def serve_api(manager, system_status_provider, kit_id_provider, config_provider=
     host = host or os.environ.get("DRAGONSYNC_API_HOST", "0.0.0.0")
     port = port or int(os.environ.get("DRAGONSYNC_API_PORT", "8088"))
     APIServer.manager = manager
+    APIServer.signal_manager = signal_manager
     APIServer.system_status_provider = system_status_provider
     APIServer.kit_id_provider = kit_id_provider
     APIServer.config_provider = config_provider

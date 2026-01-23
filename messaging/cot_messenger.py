@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Copyright 2025 cemaxecuter
+Copyright 2025-2026 CEMAXECUTER LLC.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,8 +21,8 @@ import logging
 import time
 import threading
 from typing import Optional, List, Tuple
-from tak_client import TAKClient
-from tak_udp_client import TAKUDPClient
+from .tak_client import TAKClient
+from .tak_udp_client import TAKUDPClient
 
 logger = logging.getLogger(__name__)
 
