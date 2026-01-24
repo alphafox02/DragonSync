@@ -501,6 +501,18 @@ static_alt = 220
   - `tak_tls_certfile` + `tak_tls_keyfile` (+ optional `tak_tls_cafile`).
 - You can use `tak_tls_skip_verify=true` for testing self‑signed certs (turn off in production).
 
+### CoT Icons and UA Type
+DragonSync uses the **UA Type** field from Remote ID to determine the CoT icon displayed in ATAK:
+
+| UA Type | Description | CoT Type |
+|---------|-------------|----------|
+| 1 | Aeroplane (Fixed wing) | `a-f-A-f` (fixed-wing icon) |
+| 2 | Helicopter / Multirotor | `a-u-A-M-H-R` (rotorcraft icon) |
+| 3-4 | Gyroplane / VTOL | `a-u-A-M-H-R` (rotorcraft icon) |
+| Other | Various | `a-u-A-M-H-R` (default rotorcraft) |
+
+**Note:** The UA Type is broadcast by the drone's Remote ID transmitter and cannot be changed by DragonSync. If a quadcopter appears with a fixed-wing icon in ATAK, the RID transmitter was misconfigured by the manufacturer or operator to report the wrong UA Type.
+
 ---
 
 ## Lattice (optional)
