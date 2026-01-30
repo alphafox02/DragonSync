@@ -71,7 +71,26 @@ def load_gps_ini():
     return None
 
 def get_gps_data(debug=False):
-    """Retrieve GPS data from gpsd if available; fall back to static values."""
+    """Retrieve GPS data from gpsd if available; fall back to static values.
+
+    If static GPS is configured, use it immediately without attempting gpsd.
+    This avoids blocking when gpsd is running but has no fix.
+    """
+    # If static GPS is configured, use it immediately - don't block on gpsd
+    if STATIC_GPS['lat'] is not None and STATIC_GPS['lon'] is not None:
+        if debug:
+            print(f"Using static GPS: {STATIC_GPS}")
+        return {
+            'latitude': STATIC_GPS['lat'],
+            'longitude': STATIC_GPS['lon'],
+            'altitude': STATIC_GPS['alt'] if STATIC_GPS['alt'] is not None else 'N/A',
+            'speed': 'N/A',
+            'track': 'N/A',
+            'gps_fix': False,
+            'time_source': 'static'
+        }
+
+    # No static GPS configured - try gpsd
     try:
         gpsd = gps(mode=WATCH_ENABLE | WATCH_NEWSTYLE)
 
@@ -105,20 +124,6 @@ def get_gps_data(debug=False):
     except Exception as e:
         if debug:
             print(f"Error connecting to gpsd: {e}")
-
-    # fall back to static if available
-    if STATIC_GPS['lat'] is not None and STATIC_GPS['lon'] is not None:
-        if debug:
-            print(f"Using static GPS: {STATIC_GPS}")
-        return {
-            'latitude': STATIC_GPS['lat'],
-            'longitude': STATIC_GPS['lon'],
-            'altitude': STATIC_GPS['alt'] if STATIC_GPS['alt'] is not None else 'N/A',
-            'speed': 'N/A',
-            'track': 'N/A',
-            'gps_fix': False,
-            'time_source': 'static'
-        }
 
     return {
         'latitude': 'N/A',
