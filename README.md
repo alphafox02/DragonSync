@@ -18,8 +18,8 @@ DragonSync can also ingest **ADS‑B / UAT (978 MHz)** aircraft data from a loca
 - [How it Works (on WarDragon)](#how-it-works-on-wardragon)
 - [Quick Start (WarDragon)](#quick-start-wardragon)
 - [HTTP API (Read-Only)](#http-api-read-only)
-- [ADS-B / 978 Integration (Experimental)](#ads-b--978-integration-experimental)
-- [`config.ini` (WarDragon-tuned example)](#configini-wardragon-tuned-example)
+- [ADS-B / 978 Integration](#ads-b--978-integration)
+- [Configuration](#configuration)
 - [Signal Alerts (Optional)](#signal-alerts-optional)
 - [Kismet Ingest (Optional)](#kismet-ingest-optional)
 - [Home Assistant (MQTT)](#home-assistant-mqtt)
@@ -28,6 +28,12 @@ DragonSync can also ingest **ADS‑B / UAT (978 MHz)** aircraft data from a loca
 - [Lattice (optional)](#lattice-optional)
 - [Tips & Troubleshooting](#tips--troubleshooting)
 - [License](#license)
+
+### Documentation
+
+- [Configuration Reference](docs/config-reference.md) — Full `config.ini` settings
+- [MQTT Payload Schema](docs/mqtt-schema.md) — JSON field reference for MQTT consumers
+- [ADS-B Setup Guide](docs/adsb-setup.md) — Detailed readsb integration
 
 ---
 
@@ -192,185 +198,50 @@ api_port = 8088
 
 ---
 
-## ADS‑B / 978 Integration (Experimental)
+## ADS-B / 978 Integration
 
-DragonSync can ingest aircraft data from a local `readsb` instance via HTTP. This is currently a **multi‑step and somewhat manual process**, and there are trade‑offs with SDR usage:
+DragonSync can ingest aircraft data from a local `readsb` instance via HTTP and convert it to CoT.
 
-- You can dedicate a **separate SDR** to ADS‑B / 978.
-- Or temporarily **stop the drone routine on the AntSDR** and repurpose its SDR path for ADS‑B.
-
-At the moment, only one of these SDR‑driven roles can use the same RF front‑end at once (e.g., AntSDR focusing on DJI vs ADS‑B). A future WarDragon Pro image will make this smoother, but the flow below works today.
-
-### 1. Start `readsb` (Pluto / AntSDR example)
-
-Assuming `readsb` is built/installed and you’re using the AntSDR in its Pluto‑compatible mode via SoapySDR:
-
-```bash
-sudo readsb --device-type soapysdr --soapy-device="driver=plutosdr" --freq=1090000000 --no-interactive --write-json=/run/readsb --write-json-every=1 --json-location-accuracy=2 --net-bind-address=0.0.0.0 --net-api-port=8080 --soapy-enable-agc --sdr-buffer-size=128
-```
-
-Notes:
-
-- This example tunes **1090 MHz** for standard ADS‑B.
-- For other SDRs, adjust `--device-type` and `--soapy-device` (or use native `--device-type` options like `rtlsdr`).
-- `--net-api-port=8080` exposes the readsb HTTP API.
-- DragonSync reads from `http://127.0.0.1:8080/?all_with_pos`.
-
-### 2. Configure DragonSync to consume readsb
-
-In your `config.ini`, add or update ADS‑B settings (example names shown; adjust to match your actual config):
-
+**Quick config:**
 ```ini
 [SETTINGS]
-
-# ... existing settings above ...
-
-# ADS-B / UAT aircraft ingestion (optional)
 adsb_enabled = true
 adsb_json_url = http://127.0.0.1:8080/?all_with_pos
-
-# Optional altitude gates (feet). 0 = disabled.
-adsb_min_alt = 0
-adsb_max_alt = 0
 ```
 
-DragonSync’s ADS‑B worker:
-
-- Polls `adsb_json_url` once per `poll_interval`.
-- Expects readsb‑style JSON with an `aircraft` list (which `/?all_with_pos` provides).
-- Builds CoT per aircraft with:
-  - position, altitude (geom/baro), speed, track
-  - richer remarks (hex, callsign, squawk, reg, category, on‑ground flag)
-  - CE/LE derived from NACp/NACv when available.
-
-### 3. Considerations for 1090 vs 978 and SDR usage
-
-- **Single SDR (AntSDR)**  
-  - You can either:
-    - Run DJI/FPV‑related tasks **or**
-    - Run `readsb` for ADS‑B / 978
-  - Switching roles means stopping one and starting the other; this is best used for **demo/experiment** modes for now.
-- **Multiple SDRs**  
-  - For best results (continuous drone + aircraft coverage), dedicate:
-    - One SDR path to **drone detection** (DJI / RID).
-    - Another SDR (RTL‑SDR, second AntSDR, etc.) to **ADS‑B / 978** with its own `readsb` instance.
-  - You can run readsb with a different device selection and still point DragonSync at its API.
-
-Future versions may support more automated orchestration, but the above is the current working approach.
+For detailed setup instructions including readsb configuration and SDR considerations, see **[ADS-B Setup Guide](docs/adsb-setup.md)**.
 
 ---
 
-## `config.ini` (WarDragon‑tuned example)
+## Configuration
+
+Edit `config.ini` to configure DragonSync. Here's a minimal example for multicast CoT:
 
 ```ini
 [SETTINGS]
-
 # ZMQ inputs (WarDragon defaults)
 zmq_host = 127.0.0.1
-zmq_port = 4224          # Drone telemetry stream
-zmq_status_port = 4225   # WarDragon monitor (GPS, system)
+zmq_port = 4224
+zmq_status_port = 4225
 
-# FPV signals (optional)
-fpv_enabled = false
-fpv_zmq_host = 127.0.0.1
-fpv_zmq_port = 4226
-fpv_stale = 60
-fpv_radius_m = 15
-fpv_rate_limit = 2.0
-fpv_max_signals = 200
-fpv_confirm_only = true
-
-# TAK Server output (optional). If blank, TAK server is disabled.
-tak_host =
-tak_port =
-tak_protocol =           # "tcp" or "udp"
-tak_tls_p12 =
-tak_tls_p12_pass =
-tak_tls_certfile =
-tak_tls_keyfile =
-tak_tls_cafile =
-tak_tls_skip_verify = true
-
-# Multicast CoT to ATAK (simple zero‑server option)
+# Multicast CoT to ATAK
 enable_multicast = true
 tak_multicast_addr = 239.2.3.1
 tak_multicast_port = 6969
-tak_multicast_interface = 0.0.0.0
-multicast_ttl = 1
+```
 
-# Runtime behavior
-rate_limit = 3.0         # min seconds between sends per drone
-max_drones = 30
-inactivity_timeout = 60.0
-enable_receive = false
+For Home Assistant integration, add:
 
-# MQTT / Home Assistant (optional)
-mqtt_enabled = false
+```ini
+# MQTT / Home Assistant
+mqtt_enabled = true
 mqtt_host = 127.0.0.1
 mqtt_port = 1883
-mqtt_topic = wardragon/drones
-
-mqtt_username =
-mqtt_password =
-mqtt_tls = false
-mqtt_ca_file =
-mqtt_certfile =
-mqtt_keyfile =
-mqtt_tls_insecure = false
-
-# Needed for HA auto‑discovery (per‑drone topics)
 per_drone_enabled = true
-per_drone_base = wardragon/drone
 ha_enabled = true
-ha_prefix = homeassistant
-ha_device_base = wardragon_drone
-#
-# Signal alerts (optional)
-mqtt_signals_enabled = false
-mqtt_signals_topic = wardragon/signals
-mqtt_ha_signal_tracker = false
-mqtt_ha_signal_id = signal_latest
-
-### MQTT options explained
-- `mqtt_enabled`: master switch for MQTT output.
-- `mqtt_host` / `mqtt_port`: broker location.
-- `mqtt_topic`: **aggregate** stream where each drone update is a JSON message.
-- `per_drone_enabled`: publish per‑drone state to `mqtt_per_drone_base/<drone_id>` (required for HA discovery).
-- `mqtt_per_drone_base`: base topic for per‑drone JSON.
-- `mqtt_retain`: retain last state on broker (recommended for HA dashboards).
-- `mqtt_username` / `mqtt_password`: broker auth.
-- `mqtt_tls`: enable TLS to broker; set `mqtt_ca_file` and optionally `mqtt_certfile`/`mqtt_keyfile`.
-- `mqtt_tls_insecure`: skip TLS hostname/chain verification (dev only).
-- `mqtt_ha_enabled`: publish Home Assistant discovery entities.
-- `mqtt_ha_prefix`: HA discovery topic prefix (default `homeassistant`).
-- `mqtt_ha_device_base`: HA device ID prefix for drones.
-- `mqtt_signals_enabled`: publish signal alerts to MQTT.
-- `mqtt_signals_topic`: topic for signal alerts (JSON).
-- `mqtt_ha_signal_tracker`: create a **per‑kit** HA map dot that jumps to the latest signal seen by that kit (uses `seen_by`).
-- `mqtt_ha_signal_id`: unique ID suffix for the HA signal entity.
-
-**Hard‑coded system topics** (not configurable yet):
-- `wardragon/system/attrs` (kit status attributes)
-- `wardragon/system/availability` and `wardragon/service/availability`
-
-# Lattice (optional)
-lattice_enabled = false
-lattice_token =
-# Either a full base URL:
-lattice_base_url =
-# or just the endpoint host (https:// will be prefixed):
-lattice_endpoint =
-lattice_sandbox_token =
-lattice_source_name = DragonSync
-lattice_drone_rate = 1.0
-lattice_wd_rate = 0.2
-
-# ADS-B / UAT (optional)
-adsb_enabled = false
-adsb_json_url = http://127.0.0.1:8080/?all_with_pos
-adsb_min_alt = 0
-adsb_max_alt = 0
 ```
+
+For the complete settings reference including TAK server TLS, Lattice, ADS-B, and all MQTT options, see **[Configuration Reference](docs/config-reference.md)**.
 
 ---
 
@@ -467,6 +338,10 @@ sudo systemctl enable --now mosquitto
 mosquitto_sub -h 127.0.0.1 -t 'homeassistant/#' -v
 mosquitto_sub -h 127.0.0.1 -t 'wardragon/#' -v
 ```
+
+### MQTT Payload Schema
+
+For the complete JSON field reference for drones, signals, aircraft, and system status, see **[MQTT Payload Schema](docs/mqtt-schema.md)**.
 
 ---
 

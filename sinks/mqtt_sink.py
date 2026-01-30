@@ -561,6 +561,8 @@ class MqttSink:
             "rid_status": g("rid_status", None),
             "rid_tracking": g("rid_tracking", None),
             "rid_source": g("rid_source", None),
+            "rid_lookup_attempted": g("rid_lookup_attempted", False),
+            "rid_lookup_success": g("rid_lookup_success", False),
 
             # existing keys used elsewhere
             "lat": _f(g("lat", 0.0)),
@@ -569,12 +571,14 @@ class MqttSink:
             # HA device_tracker expects these names for map placement
             "latitude": _f(g("lat", 0.0)),
             "longitude": _f(g("lon", 0.0)),
-            "gps_accuracy": _f(horiz_acc),  # optional
+            "gps_accuracy": _f(horiz_acc),  # HA compatibility
 
             "alt": _f(g("alt", 0.0)),
             "height": _f(g("height", 0.0)),
+            "pressure_altitude": _f_or_none(g("pressure_altitude", None)),
             "speed": _f(g("speed", 0.0)),
             "vspeed": _f(g("vspeed", 0.0)),
+            "speed_multiplier": _f_or_none(g("speed_multiplier", None)),
             "direction": _f(g("direction", 0.0)),
             "rssi": _f(g("rssi", 0.0)),
             "pilot_lat": _f(g("pilot_lat", 0.0)),
@@ -585,6 +589,7 @@ class MqttSink:
             "id_type": g("id_type", ""),
             "ua_type": g("ua_type", None),
             "ua_type_name": g("ua_type_name", ""),
+            "caa_id": g("caa_id", ""),
             "operator_id_type": g("operator_id_type", ""),
             "operator_id": g("operator_id", ""),
             "op_status": g("op_status", ""),
@@ -596,6 +601,14 @@ class MqttSink:
             "index": g("index", 0),
             "runtime": g("runtime", 0),
             "seen_by": g("seen_by", None),
+            "last_update_time": g("last_update_time", None),
+            "track_type": "drone",
+            # accuracy fields (RID spec strings)
+            "horizontal_accuracy": g("horizontal_accuracy", ""),
+            "vertical_accuracy": g("vertical_accuracy", ""),
+            "baro_accuracy": g("baro_accuracy", ""),
+            "speed_accuracy": g("speed_accuracy", ""),
+            "timestamp_accuracy": g("timestamp_accuracy", ""),
             # radio
             "freq": freq,
             "freq_mhz": freq_mhz,
