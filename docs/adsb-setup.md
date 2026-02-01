@@ -178,11 +178,29 @@ If MQTT is enabled with `aircraft_enabled = true`, aircraft are published to `wa
   "squawk": "1200",
   "category": "A3",
   "on_ground": false,
+  "rssi": -8.5,
   "track_type": "aircraft"
 }
 ```
 
 See [mqtt-schema.md](mqtt-schema.md) for the complete field reference.
+
+### Signal Strength (RSSI)
+
+The `rssi` field contains signal strength from readsb, measured in **dBFS** (decibels relative to full scale), not dBm.
+
+| Value | Meaning |
+|-------|---------|
+| 0 dBFS | Maximum signal (ADC saturation) |
+| -10 dBFS | Very strong signal |
+| -20 dBFS | Good signal |
+| -30 dBFS | Weak signal |
+
+**Important notes:**
+- dBFS is relative to the SDR's ADC, not absolute power
+- Values depend on SDR gain settings
+- For multi-kit triangulation, all kits should use similar gain settings
+- `rssi` may be `null` if readsb doesn't provide it (older versions or certain configurations)
 
 ---
 
