@@ -131,6 +131,7 @@ ADS-B aircraft published to `wardragon/aircraft` (when enabled):
 | `on_ground` | bool | Whether aircraft is on ground |
 | `nac_p` | float/null | NACp accuracy value |
 | `nac_v` | float/null | NACv accuracy value |
+| `rssi` | float/null | Signal strength (dBFS from readsb) |
 | `seen_by` | string/null | Kit identifier |
 | `track_type` | string | Always `"aircraft"` |
 
