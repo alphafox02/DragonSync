@@ -134,6 +134,7 @@ class ADSBTracker:
             "on_ground": on_ground,
             "nac_p": nac_p,
             "nac_v": nac_v,
+            "rssi": craft.get("rssi"),  # Signal strength from readsb (dBFS)
             "last_update_time": time.time(),
             "source": "adsb",
             "seen_by": seen_by,

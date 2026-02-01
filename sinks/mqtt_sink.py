@@ -494,6 +494,7 @@ class MqttSink:
             "on_ground": bool(aircraft.get("onground") or aircraft.get("OnGround", False)),
             "nac_p": _f_or_none(aircraft.get("nac_p") or aircraft.get("NACp")),
             "nac_v": _f_or_none(aircraft.get("nac_v") or aircraft.get("NACv")),
+            "rssi": _f_or_none(aircraft.get("rssi")),  # Signal strength from readsb (dBFS)
             "seen_by": aircraft.get("seen_by"),
             "track_type": "aircraft",
         }
