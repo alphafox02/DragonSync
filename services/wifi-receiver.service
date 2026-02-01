@@ -8,12 +8,19 @@ Type=simple
 User=root
 WorkingDirectory=/home/dragon/WarDragon/DroneID
 
+# Wait up to 30s for USB WiFi adapter to appear (handles boot race condition)
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 30); do if ls /sys/class/net/wl* 2>/dev/null | grep -qv "^/sys/class/net/wlo"; then exit 0; fi; sleep 1; done; echo "No USB WiFi interface found"; exit 1'
+
 ExecStart=/home/dragon/WarDragon/DroneID/.venv/bin/python /home/dragon/WarDragon/DroneID/wifi_receiver.py -z -g --zmqsetting 127.0.0.1:4223
 
 Environment="PATH=/home/dragon/WarDragon/DroneID/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 Restart=always
-RestartSec=3
+RestartSec=5
+
+# Prevent rapid restart loops - max 5 restarts in 5 minutes
+StartLimitBurst=5
+StartLimitIntervalSec=300
 
 [Install]
 WantedBy=multi-user.target
