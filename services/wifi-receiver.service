@@ -18,10 +18,6 @@ Environment="PATH=/home/dragon/WarDragon/DroneID/.venv/bin:/usr/local/sbin:/usr/
 Restart=always
 RestartSec=5
 
-# Prevent rapid restart loops - max 5 restarts in 5 minutes
-StartLimitBurst=5
-StartLimitIntervalSec=300
-
 [Install]
 WantedBy=multi-user.target
 
