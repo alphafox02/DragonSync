@@ -42,9 +42,14 @@ multicast_ttl = 1
 
 # Runtime behavior
 rate_limit = 3.0         # min seconds between sends per drone
-max_drones = 30
 inactivity_timeout = 60.0
 enable_receive = false
+
+# Drone tracking capacity (two-tier priority system)
+max_verified_drones = 70   # FAA RID-verified drones (evicted last)
+max_unverified_drones = 30 # Unverified drones
+# Legacy single-tier mode (uncomment to disable RID priority):
+# max_drones = 60
 
 # MQTT / Home Assistant (optional)
 mqtt_enabled = false
@@ -60,18 +65,27 @@ mqtt_certfile =
 mqtt_keyfile =
 mqtt_tls_insecure = false
 
-# Needed for HA auto-discovery (per-drone topics)
-per_drone_enabled = true
-per_drone_base = wardragon/drone
-ha_enabled = true
-ha_prefix = homeassistant
-ha_device_base = wardragon_drone
+# Per-drone topics (required for HA auto-discovery)
+mqtt_per_drone_enabled = true
+mqtt_per_drone_base = wardragon/drone
+
+# Home Assistant discovery
+mqtt_ha_enabled = true
+mqtt_ha_prefix = homeassistant
+mqtt_ha_device_base = wardragon_drone
+
+# Aircraft topics (ADS-B) - requires mqtt_enabled = true
+mqtt_aircraft_enabled = false
+mqtt_aircraft_topic = wardragon/aircraft
 
 # Signal alerts (optional)
 mqtt_signals_enabled = false
 mqtt_signals_topic = wardragon/signals
 mqtt_ha_signal_tracker = false
 mqtt_ha_signal_id = signal_latest
+
+# Message retention
+mqtt_retain = true
 
 # Lattice (optional)
 lattice_enabled = false
@@ -88,6 +102,10 @@ lattice_wd_rate = 0.2
 # ADS-B / UAT (optional)
 adsb_enabled = false
 adsb_json_url = http://127.0.0.1:8080/?all_with_pos
+adsb_uid_prefix = adsb-
+adsb_cot_stale = 15
+adsb_cache_ttl = 120
+adsb_rate_limit = 3.0
 adsb_min_alt = 0
 adsb_max_alt = 0
 
@@ -151,15 +169,21 @@ api_port = 8088
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `rate_limit` | `3.0` | Min seconds between CoT sends per drone |
-| `max_drones` | `30` | Max concurrent drones to track |
+| `max_verified_drones` | `70` | Max FAA RID-verified drones (evicted last) |
+| `max_unverified_drones` | `30` | Max unverified drones |
+| `max_drones` | (none) | Legacy single-tier mode (disables RID priority) |
 | `inactivity_timeout` | `60.0` | Seconds before drone is marked inactive |
 | `enable_receive` | `false` | Enable receiving CoT (not typically needed) |
 
+**Note:** The two-tier system prioritizes FAA RID-verified drones, evicting unverified drones first when capacity is reached. Use `max_drones` only if you want all drones treated equally.
+
 ### MQTT / Home Assistant
+
+**Important:** `mqtt_enabled = true` is the master switch. All other MQTT features require it to be enabled.
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `mqtt_enabled` | `false` | Master switch for MQTT output |
+| `mqtt_enabled` | `false` | **Master switch** for all MQTT output |
 | `mqtt_host` | `127.0.0.1` | MQTT broker hostname/IP |
 | `mqtt_port` | `1883` | MQTT broker port |
 | `mqtt_topic` | `wardragon/drones` | Aggregate topic for all drone updates |
@@ -170,13 +194,16 @@ api_port = 8088
 | `mqtt_certfile` | (empty) | Client certificate for mTLS |
 | `mqtt_keyfile` | (empty) | Client key for mTLS |
 | `mqtt_tls_insecure` | `false` | Skip TLS verification (dev only) |
-| `per_drone_enabled` | `true` | Publish per-drone topics (required for HA) |
-| `per_drone_base` | `wardragon/drone` | Base topic for per-drone JSON |
-| `ha_enabled` | `true` | Enable Home Assistant discovery |
-| `ha_prefix` | `homeassistant` | HA discovery topic prefix |
-| `ha_device_base` | `wardragon_drone` | HA device ID prefix |
+| `mqtt_retain` | `true` | Retain messages (good for HA dashboards) |
+| `mqtt_per_drone_enabled` | `false` | Publish per-drone topics (required for HA) |
+| `mqtt_per_drone_base` | `wardragon/drone` | Base topic for per-drone JSON |
+| `mqtt_aircraft_enabled` | `false` | Publish ADS-B aircraft to MQTT |
+| `mqtt_aircraft_topic` | `wardragon/aircraft` | Topic for aircraft updates |
 | `mqtt_signals_enabled` | `false` | Publish signal alerts to MQTT |
 | `mqtt_signals_topic` | `wardragon/signals` | Topic for signal alerts |
+| `mqtt_ha_enabled` | `false` | Enable Home Assistant discovery |
+| `mqtt_ha_prefix` | `homeassistant` | HA discovery topic prefix |
+| `mqtt_ha_device_base` | `wardragon_drone` | HA device ID prefix |
 | `mqtt_ha_signal_tracker` | `false` | Create per-kit HA signal tracker |
 | `mqtt_ha_signal_id` | `signal_latest` | Unique ID suffix for signal entity |
 
@@ -204,8 +231,14 @@ api_port = 8088
 |---------|---------|-------------|
 | `adsb_enabled` | `false` | Enable ADS-B ingestion |
 | `adsb_json_url` | `http://127.0.0.1:8080/?all_with_pos` | readsb API URL |
+| `adsb_uid_prefix` | `adsb-` | Prefix for aircraft CoT UIDs |
+| `adsb_cot_stale` | `15` | Seconds before CoT message expires |
+| `adsb_cache_ttl` | `120` | Seconds to keep aircraft in cache |
+| `adsb_rate_limit` | `3.0` | Min seconds between CoT sends per aircraft |
 | `adsb_min_alt` | `0` | Min altitude filter (feet, 0=disabled) |
 | `adsb_max_alt` | `0` | Max altitude filter (feet, 0=disabled) |
+
+**Note:** To publish aircraft to MQTT, also set `mqtt_enabled = true` and `mqtt_aircraft_enabled = true`.
 
 ### HTTP API
 
@@ -271,6 +304,6 @@ enable_multicast = true
 mqtt_enabled = true
 mqtt_host = 127.0.0.1
 mqtt_port = 1883
-per_drone_enabled = true
-ha_enabled = true
+mqtt_per_drone_enabled = true
+mqtt_ha_enabled = true
 ```

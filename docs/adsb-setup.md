@@ -163,7 +163,15 @@ Set to `0` to disable filtering.
 
 ## MQTT Output
 
-If MQTT is enabled with `aircraft_enabled = true`, aircraft are published to `wardragon/aircraft`:
+To publish aircraft data to MQTT, you must enable both MQTT and aircraft publishing in `config.ini`:
+
+```ini
+mqtt_enabled = true
+mqtt_aircraft_enabled = true
+mqtt_aircraft_topic = wardragon/aircraft
+```
+
+Aircraft are then published to the configured topic (default: `wardragon/aircraft`):
 
 ```json
 {

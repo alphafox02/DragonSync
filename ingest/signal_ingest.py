@@ -86,6 +86,7 @@ def _parse_fpv_alert(message: Any) -> Optional[Dict[str, Any]]:
             data["bandwidth_hz"] = sig.get("bandwidth_hz")
             data["pal_conf"] = sig.get("pal_conf")
             data["ntsc_conf"] = sig.get("ntsc_conf")
+            data["rssi"] = sig.get("rssi")  # Signal strength in dBm
 
     if not data.get("center_hz") and data.get("frequency_hz"):
         data["center_hz"] = data.get("frequency_hz")
@@ -250,6 +251,7 @@ def start_signal_worker(
                         "bandwidth_hz": alert.get("bandwidth_hz"),
                         "pal_conf": alert.get("pal_conf"),
                         "ntsc_conf": alert.get("ntsc_conf"),
+                        "rssi": alert.get("rssi"),
                         "sensor_lat": base_lat,
                         "sensor_lon": base_lon,
                         "sensor_alt": float(sensor_alt or 0.0),

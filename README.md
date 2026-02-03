@@ -237,8 +237,8 @@ For Home Assistant integration, add:
 mqtt_enabled = true
 mqtt_host = 127.0.0.1
 mqtt_port = 1883
-per_drone_enabled = true
-ha_enabled = true
+mqtt_per_drone_enabled = true
+mqtt_ha_enabled = true
 ```
 
 For the complete settings reference including TAK server TLS, Lattice, ADS-B, and all MQTT options, see **[Configuration Reference](docs/config-reference.md)**.
@@ -249,7 +249,7 @@ For the complete settings reference including TAK server TLS, Lattice, ADS-B, an
 
 DragonSync can ingest **signal alerts** (currently FPV energy/confirm from the WarDragon FPV scan) and emit CoT spot reports. These are **not** drone tracks; they show as near‑kit alerts and are exposed via `GET /signals` for the ATAK plugin.
 
-If MQTT is enabled with `mqtt_signals_enabled=true`, alerts are also published to `wardragon/signals`. When `mqtt_ha_signal_tracker=true`, DragonSync publishes per‑kit signal attributes to `wardragon/signals/<seen_by>` for HA map dots.
+To publish signal alerts via MQTT, set `mqtt_enabled=true` and `mqtt_signals_enabled=true`. Alerts are then published to `wardragon/signals`. For Home Assistant, also set `mqtt_ha_signal_tracker=true` to create a per‑kit "Signal Alert" device_tracker.
 
 **Enable**
 
@@ -304,7 +304,7 @@ If the file is missing or empty, **no Kismet CoT is sent**. This prevents ATAK f
 **Notes**
 - For ATAK on the same LAN/VPN, multicast is easiest (`enable_multicast=true`). In ATAK, add a Network feed for the same group/port.
 - For a TAK server, fill `tak_host`, `tak_port`, and `tak_protocol`. Add TLS fields if required by your server.
-- For **Home Assistant**, set `mqtt_enabled=true`, `per_drone_enabled=true`, and `ha_enabled=true`. DragonSync will auto‑create entities.
+- For **Home Assistant**, set `mqtt_enabled=true`, `mqtt_per_drone_enabled=true`, and `mqtt_ha_enabled=true`. DragonSync will auto‑create entities.
 - For ADS‑B / 978, set `adsb_enabled=true` and ensure `adsb_json_url` points at your readsb API (`/?all_with_pos` is recommended).
 
 ---
@@ -400,7 +400,7 @@ Enable with `lattice_enabled=true` and set either `lattice_base_url` or `lattice
 ## Tips & Troubleshooting
 
 - **No dots in ATAK (multicast)**: same VLAN/VPN, Wireshark `udp.port==6969`, check switch IGMP snooping.
-- **No entities in HA**: ensure `mqtt_enabled=true`, `per_drone_enabled=true`, `ha_enabled=true`. Watch `homeassistant/#` for discovery messages.
+- **No entities in HA**: ensure `mqtt_enabled=true`, `mqtt_per_drone_enabled=true`, `mqtt_ha_enabled=true`. Watch `homeassistant/#` for discovery messages.
 - **Template warnings in HA**: DragonSync uses resilient templates (e.g., `| float(0)`), so you should not see float/None errors. If you customized templates, prefer `| float(0)`.
 - **Entities don’t disappear**: your DragonSync `DroneManager` should call `mark_inactive(drone_id)` on timeout (the WarDragon repo includes this). That sets HA trackers to **offline** while preserving history.
 - **TAK TLS**: verify `.p12` path/password or PEM paths; try `tak_tls_skip_verify=true` for dev.

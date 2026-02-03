@@ -93,6 +93,7 @@ Signal alerts (FPV detections) published to `wardragon/signals`:
 | `bandwidth_hz` | float/null | Signal bandwidth (Hz) |
 | `pal` | float/null | PAL confidence score |
 | `ntsc` | float/null | NTSC confidence score |
+| `rssi` | float/null | Signal strength (dBm) |
 | `sensor_lat` | float/null | Sensor latitude |
 | `sensor_lon` | float/null | Sensor longitude |
 | `sensor_alt` | float/null | Sensor altitude |
