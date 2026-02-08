@@ -39,8 +39,8 @@ DragonSync can also ingest **ADS‑B / UAT (978 MHz)** aircraft data from a loca
 
 ## Features  
 
-- **Remote ID Drone Detection:**  
-   Uses [DroneID](https://github.com/alphafox02/DroneID) to detect Bluetooth Remote ID signals. Thanks to @bkerler for this fantastic tool. WiFi Remote ID is currently handled by an ESP32.
+- **Remote ID Drone Detection:**
+   Uses [droneid-go](https://github.com/alphafox02/droneid-go) to detect WiFi and Bluetooth Remote ID signals. BLE capture via Sniffle (thanks @bkerler). Some kits also support ESP32-based WiFi Remote ID capture.
 - **DJI DroneID Detection:**
    Uses [Antsdr_DJI](https://github.com/alphafox02/antsdr_dji_droneid) to detect DJI DroneID signals.  
 - **ADS‑B / UAT (978) Integration (optional):**  
