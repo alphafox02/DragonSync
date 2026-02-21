@@ -1,14 +1,21 @@
 [Unit]
-Description=DJI Receiver Service
+Description=DJI DroneID Receiver (AntSDR)
+Documentation=https://github.com/alphafox02/antsdr_dji_droneid
 After=network-online.target
 Wants=network-online.target
 
 [Service]
+Type=simple
 User=dragon
-WorkingDirectory=/home/dragon/WarDragon/DroneID
-ExecStart=/usr/bin/python3 /home/dragon/WarDragon/DroneID/dji_receiver.py
+WorkingDirectory=/home/dragon/WarDragon/antsdr_dji_droneid
+ExecStart=/usr/bin/python3 /home/dragon/WarDragon/antsdr_dji_droneid/dji_receiver.py
 Restart=always
 RestartSec=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dji-receiver
 
 [Install]
 WantedBy=multi-user.target

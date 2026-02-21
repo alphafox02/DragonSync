@@ -1,11 +1,31 @@
 [Unit]
-Description=ZMQ Decoder Service
-After=sniff_receiver.service
+Description=DroneID ZMQ Decoder (droneid-go)
+Documentation=https://github.com/alphafox02/WarDragon
+After=network.target
 
 [Service]
-ExecStart=/usr/bin/python3 /home/dragon/WarDragon/DroneID/zmq_decoder.py -z --uart /dev/esp0 --dji 127.0.0.1:4221 --zmqsetting 0.0.0.0:4224 --zmqclients 127.0.0.1:4222
-Restart=always
-User=dragon
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/home/dragon/WarDragon/droneid-go
+ExecStart=/home/dragon/WarDragon/droneid-go/droneid -g -ble auto -uart /dev/esp0 -dji 127.0.0.1:4221 -z -zmqsetting 0.0.0.0:4224
+Restart=on-failure
+RestartSec=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=zmq-decoder
+
+# Security hardening (what we can do while still running as root)
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ReadWritePaths=/sys/class/net
+
+# Environment
+Environment=HOME=/home/dragon
 
 [Install]
 WantedBy=multi-user.target
