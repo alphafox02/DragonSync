@@ -40,7 +40,7 @@ DragonSync can also ingest **ADS‑B / UAT (978 MHz)** aircraft data from a loca
 ## Features  
 
 - **Remote ID Drone Detection:**
-   Uses [droneid-go](https://github.com/alphafox02/droneid-go) to detect WiFi and Bluetooth Remote ID signals. BLE capture via Sniffle (thanks @bkerler). Some kits also support ESP32-based WiFi Remote ID capture.
+   Uses [droneid-go](https://github.com/alphafox02/droneid-go) to detect WiFi and Bluetooth Remote ID signals. BLE capture is native (built-in Sniffle firmware support via `-ble auto`, no external Python process needed). Some kits also support ESP32-based WiFi Remote ID capture.
 - **DJI DroneID Detection:**
    Uses [Antsdr_DJI](https://github.com/alphafox02/antsdr_dji_droneid) to detect DJI DroneID signals.  
 - **ADS‑B / UAT (978) Integration (optional):**  
@@ -83,7 +83,7 @@ If you install DragonSync elsewhere, ensure the following:
 
 ## TL;DR
 
-- WarDragon already runs the sniffers and the system monitor that feed ZMQ.
+- WarDragon already runs `zmq-decoder` (droneid-go) and the system monitor that feed ZMQ — no separate sniffer processes needed.
 - You only need to edit **`config.ini`** in the DragonSync repo, then run `dragonsync.py`.
 - Optional: enable MQTT + Home Assistant and/or Lattice export.
 - Optional: enable ADS‑B / 978 via a local `readsb` instance.

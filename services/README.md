@@ -1,6 +1,8 @@
 # WarDragon Services
 
-Systemd service files for the WarDragon kit. Each service file is the reference configuration for its respective component.
+Systemd service files for the WarDragon kit.
+
+> **Note**: The `zmq-decoder.service` file is owned and installed by the [droneid-go](https://github.com/alphafox02/droneid-go) repo via its `install.sh` script. Do not maintain a copy here — it will get out of sync. To update the service, update it in the droneid-go repo and re-run `sudo ./install.sh` on the kit.
 
 ## Service Map
 
