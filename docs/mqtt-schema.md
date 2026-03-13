@@ -66,6 +66,7 @@ Each drone update published to the aggregate topic (`wardragon/drones`) or per-d
 | `rssi` | float | Signal strength (dBm) |
 | `freq` | float/null | Frequency (raw, Hz or MHz) |
 | `freq_mhz` | float/null | Frequency (normalized to MHz) |
+| `transport` | string | RF transport type (e.g., `WiFi-Beacon`, `WiFi-NAN`, `BT5-LR-Extended`) |
 | **Metadata** |||
 | `index` | int | Message index |
 | `runtime` | int | Drone runtime (seconds) |

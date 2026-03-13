@@ -87,6 +87,7 @@ class Drone:
         runtime: int = 0,
         caa_id: str = "",
         freq: Optional[float] = None,
+        transport: str = "",
         seen_by: Optional[str] = None,
     ):
         self.id = id
@@ -140,6 +141,7 @@ class Drone:
         self.caa_id = caa_id
         self.last_keepalive_time = 0.0
         self.freq: Optional[float] = freq
+        self.transport: str = transport
 
         # FAA Remote ID lookup cache (per-drone, in-memory only)
         self.rid_tracking: Optional[str] = None
@@ -189,6 +191,7 @@ class Drone:
         runtime: int = 0,
         caa_id: str = "",
         freq: Optional[float] = None,
+        transport: str = "",
         seen_by: Optional[str] = None,
     ):
         """Updates the drone's telemetry data, computes fallback bearing if needed."""
@@ -256,6 +259,8 @@ class Drone:
             self.caa_id = caa_id
         if freq is not None:
             self.freq = freq
+        if transport:
+            self.transport = transport
 
         if seen_by is not None:
             self.seen_by = seen_by
@@ -341,6 +346,7 @@ class Drone:
             "runtime": self.runtime,
             "caa_id": self.caa_id,
             "freq": self._fmt_freq_mhz(self.freq),
+            "transport": self.transport or "",
             "rid": {
                 "tracking": self.rid_tracking,
                 "status": self.rid_status,

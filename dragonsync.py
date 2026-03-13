@@ -294,6 +294,7 @@ def _build_drone_update_kwargs(drone_info: Dict[str, Any], kit_id: str) -> Dict[
         'runtime': drone_info.get('runtime', 0),
         'caa_id': drone_info.get('caa', ""),
         'freq': drone_info.get('freq'),
+        'transport': drone_info.get('transport', ''),
         'seen_by': kit_id
     }
 

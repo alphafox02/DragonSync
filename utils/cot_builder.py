@@ -148,6 +148,11 @@ def build_drone_cot(drone, stale_offset: float) -> bytes:
         f"Index: {getattr(drone, 'index', 0)}; Runtime: {getattr(drone, 'runtime', 0)}s"
     )
 
+    # Transport type
+    transport = getattr(drone, 'transport', None)
+    if transport:
+        remarks += f"; Transport: {transport}"
+
     # Frequency formatting
     freq = getattr(drone, 'freq', None)
     if freq is not None and not (math.isnan(freq) or math.isinf(freq)):

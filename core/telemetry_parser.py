@@ -75,6 +75,11 @@ def parse_drone_info(message: Any, ua_type_mapping: Dict[int, str]) -> Optional[
                 drone_info['id_type'] = id_type
                 drone_info['mac'] = basic.get('MAC', drone_info.get('mac', ''))
                 drone_info['rssi'] = basic.get('RSSI', drone_info.get('rssi', 0))
+                drone_info['transport'] = basic.get('transport', drone_info.get('transport', ''))
+                # Prefer frequency_mhz from Basic ID (set by droneid-go) over Frequency Message
+                basic_freq = get_float(basic.get('frequency_mhz', None), None)
+                if basic_freq is not None:
+                    drone_info['freq'] = basic_freq
 
                 if id_type == 'Serial Number (ANSI/CTA-2063-A)':
                     drone_info['id'] = basic.get('id', 'unknown')
@@ -146,6 +151,10 @@ def parse_drone_info(message: Any, ua_type_mapping: Dict[int, str]) -> Optional[
             drone_info['id_type'] = basic.get('id_type')
             drone_info['mac']     = basic.get('MAC', drone_info.get('mac', ''))
             drone_info['rssi']    = basic.get('RSSI', drone_info.get('rssi', 0))
+            drone_info['transport'] = basic.get('transport', drone_info.get('transport', ''))
+            basic_freq = get_float(basic.get('frequency_mhz', None), None)
+            if basic_freq is not None:
+                drone_info['freq'] = basic_freq
             if basic.get('id_type') == 'Serial Number (ANSI/CTA-2063-A)':
                 drone_info['id']  = basic.get('id', 'unknown')
             elif basic.get('id_type') == 'CAA Assigned Registration ID':

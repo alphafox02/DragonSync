@@ -614,6 +614,7 @@ class MqttSink:
             # radio
             "freq": freq,
             "freq_mhz": freq_mhz,
+            "transport": g("transport", ""),
         }
         return state
 

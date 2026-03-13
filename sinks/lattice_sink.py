@@ -406,6 +406,7 @@ class LatticeSink:
             operator = f"Operator {operator_id_type}: {operator_id}"
         
         freq = g("freq")
+        transport = str(g("transport", "") or "").strip()
     
         lat = g("lat")
         lon = g("lon")
