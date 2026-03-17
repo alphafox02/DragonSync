@@ -807,7 +807,10 @@ def zmq_to_cot(
                     alt = get_float(gps_data.get('altitude', 0.0))
                     speed = get_float(gps_data.get('speed', 0.0))
                     track = get_float(gps_data.get('track', 0.0))
-            
+                    gps_fix = bool(gps_data.get('gps_fix', False))
+                    time_source = str(gps_data.get('time_source', '') or '')
+                    gpsd_time_utc = str(gps_data.get('time_utc', '') or '')
+
                     system_stats = status_message.get('system_stats', {})
                     ant_sdr_temps = status_message.get('ant_sdr_temps', {})
                     pluto_temp = ant_sdr_temps.get('pluto_temp', 'N/A')
@@ -829,6 +832,7 @@ def zmq_to_cot(
                     system_status = SystemStatus(
                         serial_number=serial_number,
                         lat=lat, lon=lon, alt=alt, speed=speed, track=track,
+                        gps_fix=gps_fix, time_source=time_source, gpsd_time_utc=gpsd_time_utc,
                         cpu_usage=cpu_usage,
                         memory_total=memory_total, memory_available=memory_available,
                         disk_total=disk_total, disk_used=disk_used,
