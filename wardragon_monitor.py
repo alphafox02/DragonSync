@@ -93,6 +93,7 @@ def get_gps_data(debug=False):
     # No static GPS configured - try gpsd
     try:
         gpsd = gps(mode=WATCH_ENABLE | WATCH_NEWSTYLE)
+        gpsd.sock.settimeout(5)
 
         if debug:
             print("Waiting for GPS data...")
