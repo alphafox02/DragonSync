@@ -4,6 +4,8 @@ Systemd service files for the WarDragon kit.
 
 > **Note**: The `zmq-decoder.service` file is owned and installed by the [droneid-go](https://github.com/alphafox02/droneid-go) repo via its `install.sh` script. Do not maintain a copy here — it will get out of sync. To update the service, update it in the droneid-go repo and re-run `sudo ./install.sh` on the kit.
 
+> **Note**: The `dji-receiver.service` file is owned by the [antsdr_dji_droneid](https://github.com/alphafox02/antsdr_dji_droneid) repo. Do not maintain a copy here — install it directly from that repo. See the antsdr_dji_droneid README for installation instructions.
+
 ## Service Map
 
 | Service | Binary / Script | Source Repo | ZMQ Port | Description |
