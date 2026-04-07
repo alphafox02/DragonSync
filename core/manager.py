@@ -244,14 +244,20 @@ class DroneManager:
 
     def _dispatch_to_sinks(self, drone_id: str, drone: Drone):
         """Helper to dispatch drone updates to all configured sinks."""
+        has_pilot = bool(drone.pilot_lat or drone.pilot_lon)
+        has_home = bool(drone.home_lat or drone.home_lon)
         for s in self.extra_sinks:
             try:
                 if hasattr(s, "publish_drone"):
                     s.publish_drone(drone)
-                if (drone.pilot_lat or drone.pilot_lon) and hasattr(s, "publish_pilot"):
+                if has_pilot and hasattr(s, "publish_pilot"):
                     s.publish_pilot(drone_id, drone.pilot_lat, drone.pilot_lon, 0.0)
-                if (drone.home_lat or drone.home_lon) and hasattr(s, "publish_home"):
+                elif not has_pilot and hasattr(s, "mark_pilot_offline"):
+                    s.mark_pilot_offline(drone_id)
+                if has_home and hasattr(s, "publish_home"):
                     s.publish_home(drone_id, drone.home_lat, drone.home_lon, 0.0)
+                elif not has_home and hasattr(s, "mark_home_offline"):
+                    s.mark_home_offline(drone_id)
             except Exception as e:
                 logger.warning("Sink publish failed for %s (sink=%s): %s", drone_id, s, e)
 

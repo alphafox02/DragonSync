@@ -1225,6 +1225,12 @@ if __name__ == "__main__":
                 aircraft_topic=config.get("mqtt_aircraft_topic", "wardragon/aircraft"),
             )
             logger.info("MQTT sink enabled.")
+            if bool(config.get("mqtt_ha_enabled")) and not bool(config.get("mqtt_per_drone_enabled")):
+                logger.warning(
+                    "mqtt_ha_enabled is true but mqtt_per_drone_enabled is false — "
+                    "Home Assistant discovery requires per-drone topics. "
+                    "Set mqtt_per_drone_enabled = true in config.ini for HA to work."
+                )
         except Exception as e:
             logger.exception("Failed to initialize MQTT sink: %s", e)
             mqtt_sink = None

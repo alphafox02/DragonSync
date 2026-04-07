@@ -231,11 +231,14 @@ class MqttSink:
             except Exception as e:
                 _log.warning("HA discovery failed for %s: %s", drone_id, e)
 
-        # Mark drone tracker online on any drone update
+        # Mark drone tracker online only when we have a real position (not 0,0)
         if self.ha_enabled and self.per_drone_enabled:
             try:
                 avail, _, _ = self._availability_topics(drone_id)
-                self.client.publish(avail, "online", qos=self.qos, retain=True)
+                lat = payload.get("lat", 0.0) or 0.0
+                lon = payload.get("lon", 0.0) or 0.0
+                status = "online" if (lat or lon) else "offline"
+                self.client.publish(avail, status, qos=self.qos, retain=True)
             except Exception as e:
                 _log.warning("Drone availability publish failed for %s: %s", drone_id, e)
 
@@ -329,6 +332,26 @@ class MqttSink:
             self.client.disconnect()
         except Exception as e:
             _log.warning("MqttSink disconnect error: %s", e)
+
+    def mark_pilot_offline(self, drone_id: str) -> None:
+        """Mark just the pilot tracker as offline (coords reverted to 0,0)."""
+        if not self.ha_enabled or not self.per_drone_enabled:
+            return
+        _, pilot_avail, _ = self._availability_topics(str(drone_id))
+        try:
+            self.client.publish(pilot_avail, "offline", qos=self.qos, retain=True)
+        except Exception as e:
+            _log.warning("Pilot offline publish failed for %s: %s", drone_id, e)
+
+    def mark_home_offline(self, drone_id: str) -> None:
+        """Mark just the home tracker as offline (coords reverted to 0,0)."""
+        if not self.ha_enabled or not self.per_drone_enabled:
+            return
+        _, _, home_avail = self._availability_topics(str(drone_id))
+        try:
+            self.client.publish(home_avail, "offline", qos=self.qos, retain=True)
+        except Exception as e:
+            _log.warning("Home offline publish failed for %s: %s", drone_id, e)
 
     # NEW: allow manager to mark trackers 'not_home' when a drone ages out
     def mark_inactive(self, drone_id: str) -> None:
@@ -704,9 +727,9 @@ class MqttSink:
             "payload_available": "online",
             "payload_not_available": "offline",
         }
-        # Retain discovery + default state + availability online
+        # Retain discovery + reset state so HA derives zone from coords + availability online
         self.client.publish(cfg_topic, json.dumps(payload), qos=self.qos, retain=True)
-        self.client.publish(state_topic, "not_home", qos=self.qos, retain=True)
+        self.client.publish(state_topic, "None", qos=self.qos, retain=True)
         self.client.publish(drone_avail, "online", qos=self.qos, retain=True)
 
         # --- Pilot tracker (pilot-XYZ) ---
@@ -730,8 +753,8 @@ class MqttSink:
             "payload_not_available": "offline",
         }
         self.client.publish(pilot_cfg_topic, json.dumps(pilot_payload), qos=self.qos, retain=True)
-        self.client.publish(pilot_state_topic, "not_home", qos=self.qos, retain=True)
-        self.client.publish(pilot_avail, "online", qos=self.qos, retain=True)
+        self.client.publish(pilot_state_topic, "None", qos=self.qos, retain=True)
+        self.client.publish(pilot_avail, "offline", qos=self.qos, retain=True)
 
         # --- Home tracker (home-XYZ) ---
         home_name = f"home-{tail}"
@@ -753,8 +776,8 @@ class MqttSink:
             "payload_not_available": "offline",
         }
         self.client.publish(home_cfg_topic, json.dumps(home_payload), qos=self.qos, retain=True)
-        self.client.publish(home_state_topic, "not_home", qos=self.qos, retain=True)
-        self.client.publish(home_avail, "online", qos=self.qos, retain=True)
+        self.client.publish(home_state_topic, "None", qos=self.qos, retain=True)
+        self.client.publish(home_avail, "offline", qos=self.qos, retain=True)
 
     # ─────────────────────────── System device (WarDragon kit) ───────────────────
 
