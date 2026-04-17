@@ -21,7 +21,7 @@ At the moment, only one SDR-driven role can use the same RF front-end at once:
 
 | Configuration | Use Case |
 |---------------|----------|
-| **Single SDR (AntSDR)** | Either drone detection OR ADS-B, not both simultaneously |
+| **Single SDR (DragonSDR)** | Either drone detection OR ADS-B, not both simultaneously |
 | **Multiple SDRs** | Dedicated SDR for drones + separate SDR for ADS-B |
 
 ### Single SDR
@@ -36,7 +36,7 @@ Switching roles means stopping one and starting the other. This is best used for
 
 For continuous drone + aircraft coverage:
 - One SDR path for **drone detection** (DJI / RID)
-- Another SDR (RTL-SDR, second AntSDR, etc.) for **ADS-B / 978** with its own `readsb` instance
+- Another SDR (RTL-SDR, second DragonSDR, etc.) for **ADS-B / 978** with its own `readsb` instance
 
 You can run readsb with a different device selection and still point DragonSync at its API.
 
@@ -46,9 +46,9 @@ You can run readsb with a different device selection and still point DragonSync 
 
 ### 1. Start readsb
 
-#### Pluto / AntSDR Example
+#### Pluto / DragonSDR Example
 
-Using the AntSDR in Pluto-compatible mode via SoapySDR:
+Using the DragonSDR in Pluto-compatible mode via SoapySDR:
 
 ```bash
 sudo readsb \

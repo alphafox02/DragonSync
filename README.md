@@ -42,7 +42,7 @@ DragonSync can also ingest **ADS‑B / UAT (978 MHz)** aircraft data from a loca
 - **Remote ID Drone Detection:**
    Uses [droneid-go](https://github.com/alphafox02/droneid-go) to detect WiFi and Bluetooth Remote ID signals. BLE capture is native (built-in Sniffle firmware support via `-ble auto`, no external Python process needed). Some kits also support ESP32-based WiFi Remote ID capture.
 - **DJI DroneID Detection:**
-   Uses [Antsdr_DJI](https://github.com/alphafox02/antsdr_dji_droneid) to detect DJI DroneID signals.  
+   Uses [DragonSDR DJI DroneID](https://github.com/alphafox02/antsdr_dji_droneid) to detect DJI DroneID signals.  
 - **ADS‑B / UAT (978) Integration (optional):**  
    Can subscribe to a local [readsb](https://github.com/wiedehopf/readsb) HTTP API (`/?all_with_pos`) and convert aircraft tracks into CoT, including NACp/NACv‑derived CE/LE, squawk, category, and more.
 - **System Status Monitoring:**  
