@@ -387,7 +387,13 @@ class LatticeSink:
         entity_id = str(g("id", "unknown")) or "unknown"
         id_type = str(g("id_type", "Unknown")) or "Unknown"
         caa = str(g("caa", "") or "").strip()
-        alias = f"{id_type}: {caa}"
+        description = str(g("description", "") or "").strip()
+        if description and caa:
+            alias = f"{description} [{id_type}: {caa}]"
+        elif description:
+            alias = f"{description} [{id_type}]"
+        else:
+            alias = f"{id_type}: {caa}"
         mac = str(g("mac", "") or "").strip()
         rssi = g("rssi")
         ua_type = str(g("ua_type_name", "Unknown")) or "Unknown"
@@ -404,9 +410,18 @@ class LatticeSink:
         operator = ""
         if operator_id and operator_id_type:
             operator = f"Operator {operator_id_type}: {operator_id}"
-        
+
         freq = g("freq")
         transport = str(g("transport", "") or "").strip()
+        freq_mhz: Optional[float] = None
+        if isinstance(freq, (int, float)):
+            try:
+                f = float(freq)
+                if f > 1e5:
+                    f = f / 1e6
+                freq_mhz = round(f, 3)
+            except Exception:
+                freq_mhz = None
     
         lat = g("lat")
         lon = g("lon")

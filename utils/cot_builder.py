@@ -148,6 +148,11 @@ def build_drone_cot(drone, stale_offset: float) -> bytes:
         f"Index: {getattr(drone, 'index', 0)}; Runtime: {getattr(drone, 'runtime', 0)}s"
     )
 
+    # Self-reported description (e.g. droneid-go's "DJI O4 (Decrypted)" or operator self-ID text)
+    description = getattr(drone, 'description', None)
+    if description:
+        remarks += f"; Description: {description}"
+
     # Transport type
     transport = getattr(drone, 'transport', None)
     if transport:

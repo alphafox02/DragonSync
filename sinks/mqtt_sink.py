@@ -694,6 +694,8 @@ class MqttSink:
         # Metadata
         sensor("ua_type", "UA Type", "{{ value_json.ua_type_name | default('') }}", icon="mdi:airplane")
         sensor("op_id", "Operator ID", "{{ value_json.operator_id | default('') }}", icon="mdi:id-card")
+        sensor("transport", "Transport", "{{ value_json.transport | default('') }}", icon="mdi:transit-connection-variant")
+        sensor("description", "Description", "{{ value_json.description | default('') }}", icon="mdi:information-outline")
 
         # Friendly description on device page
         sensor("main", "Drone", "{{ value_json.description | default('Drone') }}", icon="mdi:drone")
