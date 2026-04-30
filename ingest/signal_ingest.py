@@ -73,6 +73,8 @@ def _parse_fpv_alert(message: Any) -> Optional[Dict[str, Any]]:
             data["sensor_lat"] = loc.get("latitude")
             data["sensor_lon"] = loc.get("longitude")
             data["sensor_alt"] = loc.get("geodetic_altitude")
+            data["direction"] = loc.get("direction")
+            data["op_status"] = loc.get("op_status")
         if "Self-ID Message" in item:
             self_id = item["Self-ID Message"]
             data["self_id"] = self_id.get("text")
@@ -87,6 +89,11 @@ def _parse_fpv_alert(message: Any) -> Optional[Dict[str, Any]]:
             data["pal_conf"] = sig.get("pal_conf")
             data["ntsc_conf"] = sig.get("ntsc_conf")
             data["rssi"] = sig.get("rssi")  # Signal strength in dBm
+            if sig.get("signal_type"):
+                data["signal_type"] = sig["signal_type"]
+            data["net_id"] = sig.get("net_id")
+            data["baud_rate"] = sig.get("baud_rate")
+            data["has_mavlink"] = sig.get("has_mavlink")
 
     if not data.get("center_hz") and data.get("frequency_hz"):
         data["center_hz"] = data.get("frequency_hz")
@@ -117,6 +124,7 @@ def start_signal_worker(
     cot_messenger: Any,
     signal_manager: Any,
     mqtt_sink: Optional[Any] = None,
+    drone_manager: Optional[Any] = None,
     stale_s: float = 30.0,
     radius_m: float = 15.0,
     min_send_interval: float = 2.0,
@@ -192,7 +200,8 @@ def start_signal_worker(
                     alert = _parse_fpv_alert(message)
                     if not alert:
                         continue
-                    if confirm_only and alert.get("source") != "confirm":
+                    source_val = alert.get("source") or ""
+                    if confirm_only and "confirm" not in source_val:
                         continue
 
                     center_hz = alert.get("center_hz")
@@ -237,7 +246,8 @@ def start_signal_worker(
                     )
 
                     seen_by = seen_by_provider() if callable(seen_by_provider) else None
-                    callsign = f"FPV {source}".strip()
+                    sig_label = signal_type.upper().replace("_", "-") if signal_type not in ("fpv", None) else "FPV"
+                    callsign = f"{sig_label} {source}".strip()
 
                     signal = {
                         "uid": uid,
@@ -287,6 +297,43 @@ def start_signal_worker(
                         cot_messenger.send_cot(cot)
                     except Exception as e:
                         logger.debug("FPV signal CoT send failed: %s", e)
+
+                    # If MAVLink telemetry with GPS is present, promote
+                    # to a tracked drone in the drone dict. This gives it
+                    # full lifecycle: CoT, MQTT, HA, Lattice -- all automatic.
+                    if (drone_manager is not None
+                            and alert.get("has_mavlink") is True
+                            and alert.get("sensor_lat") is not None
+                            and alert.get("sensor_lon") is not None):
+                        try:
+                            from core.drone import Drone
+                            drone_lat = float(alert["sensor_lat"])
+                            drone_lon = float(alert["sensor_lon"])
+                            drone_alt = float(alert.get("sensor_alt") or 0)
+                            drone_id = alert.get("alert_id") or uid
+                            drone = Drone(
+                                id=drone_id,
+                                lat=drone_lat,
+                                lon=drone_lon,
+                                speed=0.0,
+                                vspeed=0.0,
+                                alt=drone_alt,
+                                height=0.0,
+                                pilot_lat=0.0,
+                                pilot_lon=0.0,
+                                description=alert.get("self_id") or f"Net ID {alert.get('net_id', '?')}",
+                                mac="",
+                                rssi=int(alert.get("rssi") or 0),
+                                transport=signal_type or "ISM-FHSS",
+                                freq=float(alert.get("center_hz") or 0) / 1e6,
+                                direction=float(alert.get("direction") or 0),
+                            )
+                            drone_manager.update_or_add_drone(drone_id, drone)
+                            logger.info("Promoted %s to drone dict (MAVLink GPS: %.5f, %.5f)",
+                                       drone_id, drone_lat, drone_lon)
+                        except Exception as e:
+                            logger.debug("Failed to promote to drone dict: %s", e)
+
                 except Exception as e:
                     logger.warning("FPV signal ingest error; skipping message: %s", e)
         except Exception as e:
