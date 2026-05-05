@@ -180,7 +180,15 @@ class MqttSink:
             else:
                 _log.warning("MqttSink connect rc=%s", rc)
 
-        def _on_disconnect(client, userdata, rc, properties=None):
+        def _on_disconnect(client, userdata, *args, **kwargs):
+            # Tolerant of paho v1 (rc, [properties]) and v2 VERSION2
+            # (disconnect_flags, reason_code, properties) callback signatures.
+            if len(args) == 3:
+                rc = args[1]  # v2: reason_code
+            elif args:
+                rc = args[0]  # v1: rc
+            else:
+                rc = None
             _log.info("MqttSink disconnected rc=%s", rc)
 
         self.client.on_connect = _on_connect
