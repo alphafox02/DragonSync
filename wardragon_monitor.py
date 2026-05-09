@@ -137,6 +137,50 @@ def get_gps_data(debug=False):
     }
 
 
+KIT_ID_CACHE_DIR = "/var/lib/wardragon"
+KIT_ID_CACHE_PATH = os.path.join(KIT_ID_CACHE_DIR, "kit-id")
+
+
+def _persist_kit_id_cache(serial_number, debug=False):
+    """Atomically persist the resolved kit serial to a fast-read cache file.
+
+    Read by DragonSync at startup to avoid waiting for the first ZMQ status
+    cycle (which can be 30+ seconds on cold boot due to dmidecode latency).
+
+    Failures are non-fatal and logged at debug only; the ZMQ status path
+    remains the canonical runtime source of the kit serial.
+    """
+    if not serial_number or not isinstance(serial_number, str):
+        return
+    # Skip rewrite if value unchanged — avoids pointless disk wear (~once per status cycle).
+    try:
+        with open(KIT_ID_CACHE_PATH, "r") as existing:
+            if existing.read().strip() == serial_number:
+                return
+    except (OSError, IOError):
+        pass  # Cache missing or unreadable; fall through to write.
+
+    tmp_path = KIT_ID_CACHE_PATH + ".tmp"
+    try:
+        os.makedirs(KIT_ID_CACHE_DIR, exist_ok=True)
+        with open(tmp_path, "w") as f:
+            f.write(serial_number + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp_path, 0o644)  # world-readable; DragonSync may run as a different user
+        os.replace(tmp_path, KIT_ID_CACHE_PATH)  # atomic on POSIX
+        if debug:
+            print(f"[kit-id-cache] persisted {KIT_ID_CACHE_PATH}: {serial_number}")
+    except Exception as e:
+        # Try to clean up tmp if it was created
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+        if debug:
+            print(f"[kit-id-cache] write failed (non-fatal): {e}")
+
+
 def get_serial_number(debug=False):
     """Retrieve the system's serial number or MAC address as a unique identifier."""
     invalid_serials = [
@@ -414,10 +458,15 @@ def main(host, port, interval, debug, static_lat=None, static_lon=None, static_a
                             print(f"[gps.ini] Reload check error: {e}")
             # ------------------------------------------------------
 
+            serial_number = get_serial_number(debug=debug)
+            # Persist resolved serial to fast-read cache for DragonSync startup.
+            # Skipped automatically when value is unchanged. Failures are non-fatal.
+            _persist_kit_id_cache(serial_number, debug=debug)
+
             data = {
                 'timestamp': time.time(),
                 'gps_data': get_gps_data(debug=debug),
-                'serial_number': get_serial_number(debug=debug),
+                'serial_number': serial_number,
                 'system_stats': get_system_stats(),
                 # --------------------------------------------
                 # Add the new temperature data to the payload
