@@ -606,6 +606,7 @@ def zmq_to_cot(
                 cot_messenger=cot_messenger,
                 signal_manager=signal_manager,
                 mqtt_sink=mqtt_sink,
+                drone_manager=drone_manager,
                 stale_s=float(config.get("fpv_stale", 60.0)),
                 radius_m=float(config.get("fpv_radius_m", 15.0)),
                 min_send_interval=float(config.get("fpv_rate_limit", 2.0)),
