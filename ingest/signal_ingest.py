@@ -298,19 +298,35 @@ def start_signal_worker(
                     except Exception as e:
                         logger.debug("FPV signal CoT send failed: %s", e)
 
-                    # If MAVLink telemetry with GPS is present, promote
-                    # to a tracked drone in the drone dict. This gives it
-                    # full lifecycle: CoT, MQTT, HA, Lattice -- all automatic.
-                    if (drone_manager is not None
-                            and alert.get("has_mavlink") is True
-                            and alert.get("sensor_lat") is not None
-                            and alert.get("sensor_lon") is not None):
+                    # If this is an RF-intercepted signal with a Net ID,
+                    # promote to a tracked drone. Net ID is the stable
+                    # identifier (like a serial number for SiK radios).
+                    # When MAVLink GPS is present, use drone's position.
+                    # When no GPS, use receiver position (we know it exists).
+                    net_id = alert.get("net_id")
+                    if drone_manager is not None and net_id is not None:
                         try:
                             from core.drone import Drone
-                            drone_lat = float(alert["sensor_lat"])
-                            drone_lon = float(alert["sensor_lon"])
+                            drone_id = f"drone-900FHSS-NETID-{net_id}"
+                            has_mav = alert.get("has_mavlink") is True
+
+                            # Position: drone GPS if MAVLink, else receiver
+                            drone_lat = float(alert.get("sensor_lat") or 0)
+                            drone_lon = float(alert.get("sensor_lon") or 0)
                             drone_alt = float(alert.get("sensor_alt") or 0)
-                            drone_id = alert.get("alert_id") or uid
+
+                            if drone_lat == 0 and drone_lon == 0:
+                                # No position available at all -- skip
+                                raise ValueError("No position")
+
+                            baud = alert.get("baud_rate")
+                            desc_parts = [f"Net ID {net_id}"]
+                            if baud:
+                                desc_parts.append(f"{int(baud)//1000}k")
+                            if has_mav:
+                                desc_parts.append("MAVLink")
+                            description = alert.get("self_id") or " ".join(desc_parts)
+
                             drone = Drone(
                                 id=drone_id,
                                 lat=drone_lat,
@@ -321,7 +337,7 @@ def start_signal_worker(
                                 height=0.0,
                                 pilot_lat=0.0,
                                 pilot_lon=0.0,
-                                description=alert.get("self_id") or f"Net ID {alert.get('net_id', '?')}",
+                                description=description,
                                 mac="",
                                 rssi=int(alert.get("rssi") or 0),
                                 transport=signal_type or "ISM-FHSS",
@@ -329,10 +345,11 @@ def start_signal_worker(
                                 direction=float(alert.get("direction") or 0),
                             )
                             drone_manager.update_or_add_drone(drone_id, drone)
-                            logger.info("Promoted %s to drone dict (MAVLink GPS: %.5f, %.5f)",
-                                       drone_id, drone_lat, drone_lon)
+                            logger.info("Tracked %s at %.5f, %.5f%s",
+                                       drone_id, drone_lat, drone_lon,
+                                       " (MAVLink)" if has_mav else " (RF only)")
                         except Exception as e:
-                            logger.debug("Failed to promote to drone dict: %s", e)
+                            logger.debug("Drone dict update skipped: %s", e)
 
                 except Exception as e:
                     logger.warning("FPV signal ingest error; skipping message: %s", e)
