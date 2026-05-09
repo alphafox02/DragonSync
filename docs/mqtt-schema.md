@@ -10,13 +10,15 @@ All payloads are produced by `sinks/mqtt_sink.py`. When in doubt, the code is au
 
 ## Topic Structure
 
-Every topic DragonSync may publish. `<id>` is the drone ID (e.g. `drone-F6Q8D244C00CL2KF`). `<seen_by>` is the WarDragon kit ID, slugified.
+Every topic DragonSync may publish. `<id>` is the drone ID (e.g. `drone-F6Q8D244C00CL2KF`). `<seen_by>` is the WarDragon kit ID. `<kit_id>` is the WarDragon kit identifier (e.g. `wardragon-G6PA14100J63`).
+
+> **Per-kit scoping (v2.0+):** System and service topics include a `<kit_id>` segment so multiple WarDragon kits can share a single MQTT broker without colliding on retained state. Drone, aircraft, and signal topics are unchanged — they're already correctly identified by drone ID or `seen_by`. Consumers should subscribe to the wildcard form (`wardragon/system/+/attrs`) to receive every kit, or to a specific kit (`wardragon/system/wardragon-G6PA14100J63/attrs`).
 
 | Topic | Retained | Purpose |
 |-------|----------|---------|
-| `wardragon/service/availability` | yes | LWT — `online` while DragonSync runs, `offline` on shutdown/crash |
-| `wardragon/drones` | configurable | Aggregate drone state (all detected drones) |
-| `wardragon/drone/<id>` | configurable | Per-drone state — same JSON as aggregate |
+| `wardragon/service/<kit_id>/availability` | yes | LWT — `online` while DragonSync runs on this kit, `offline` on shutdown/crash. Per-kit so multiple kits don't collide. |
+| `wardragon/drones` | configurable | Aggregate drone state (all detected drones from all kits; `seen_by` payload field identifies which kit) |
+| `wardragon/drone/<id>` | configurable | Per-drone state — same JSON as aggregate. Multi-kit cooperative: when two kits see the same drone they update the same retained payload (last writer wins; live messages on `wardragon/drones` carry full per-kit attribution via `seen_by`) |
 | `wardragon/drone/<id>/availability` | yes | `online`/`offline` for the drone tracker |
 | `wardragon/drone/<id>/state` | yes | HA `device_tracker` textual state (`None` initially) |
 | `wardragon/drone/<id>/pilot_attrs` | yes | Pilot location attributes (small JSON) |
@@ -31,13 +33,23 @@ Every topic DragonSync may publish. `<id>` is the drone ID (e.g. `drone-F6Q8D244
 | `wardragon/signals/<seen_by>/state` | configurable | HA signal tracker textual state |
 | `wardragon/signals/<seen_by>/availability` | yes | `online` whenever a signal arrives |
 | `wardragon/signals/availability` | yes | Marks signals offline at shutdown |
-| `wardragon/system/attrs` | no | WarDragon kit telemetry |
-| `wardragon/system/state` | no | Kit textual state |
-| `wardragon/system/availability` | yes | `online` while kit telemetry is publishing |
-| `homeassistant/sensor/<unique_id>/config` | yes | HA sensor discovery configs (when `mqtt_ha_enabled = true`) |
-| `homeassistant/device_tracker/<unique_id>/config` | yes | HA device_tracker discovery configs |
+| `wardragon/system/<kit_id>/attrs` | no | WarDragon kit telemetry, scoped per kit |
+| `wardragon/system/<kit_id>/state` | no | Kit textual state, scoped per kit |
+| `wardragon/system/<kit_id>/availability` | yes | `online` while kit telemetry is publishing, scoped per kit |
+| `homeassistant/sensor/<unique_id>/config` | yes | HA sensor discovery configs (when `mqtt_ha_enabled = true`). Per-drone IDs (`wardragon_drone_<drone_id>_*`) shared across kits; per-kit system IDs (`wardragon_drone_<kit_id>_system_*`) scoped per kit. |
+| `homeassistant/device_tracker/<unique_id>/config` | yes | HA device_tracker discovery configs (same scoping rules) |
 
 Availability topics carry the literal string `online` or `offline` (no JSON).
+
+### Kit identity lifecycle
+
+- DragonSync resolves its kit identity via `wardragon_monitor`, which reads the system serial via `dmidecode` (with MAC-address fallback) and publishes it on a ZMQ status channel.
+- A fast-read cache at `/var/lib/wardragon/kit-id` is populated by `wardragon_monitor` on each successful read. DragonSync seeds `KIT_ID` from this cache at startup so warm boots have full kit-scoped MQTT (including LWT) from the very first connection.
+- **Cold first boot** (no cache yet): DragonSync connects to the broker immediately so drone, aircraft, and signal publishes are not delayed. System/service kit-scoped publishes are deferred until the first ZMQ status message resolves the kit ID (typically within ~30 seconds). LWT is not set this run; subsequent boots are warm and have full LWT support.
+- **Hardware swap**: if the cache file pre-dates a hardware change, delete `/var/lib/wardragon/kit-id` before booting so the new hardware re-populates the cache cleanly.
+- **Broken `wardragon_monitor`**: drones, aircraft, and signals continue to publish normally. System/service kit-scoped topics stay silent rather than publishing under a placeholder identity. Warning/error logs escalate at 2 minutes, 5 minutes, and every 30 minutes thereafter.
+
+> **LWT semantics**: paho-mqtt allows only one Will Topic per connection, set before connect. DragonSync uses it for `wardragon/service/<kit_id>/availability`. Ungraceful death (SIGKILL, power loss) flips that topic to `offline`. The kit-level `wardragon/system/<kit_id>/availability` is not an LWT — it's a heartbeat that operators should treat as authoritative via attrs message presence: if `wardragon/system/<kit_id>/attrs` hasn't published in >60 seconds, the kit is unhealthy regardless of what the availability topics say.
 
 ---
 
