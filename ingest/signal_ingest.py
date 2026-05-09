@@ -304,11 +304,11 @@ def start_signal_worker(
                     # When MAVLink GPS is present, use drone's position.
                     # When no GPS, use receiver position (we know it exists).
                     net_id = alert.get("net_id")
-                    if drone_manager is not None and net_id is not None:
+                    has_mav = alert.get("has_mavlink") is True
+                    if drone_manager is not None and net_id is not None and has_mav:
                         try:
                             from core.drone import Drone
                             drone_id = f"drone-900FHSS-NETID-{net_id}"
-                            has_mav = alert.get("has_mavlink") is True
 
                             # Position: drone GPS if MAVLink, else receiver
                             drone_lat = float(alert.get("sensor_lat") or 0)
