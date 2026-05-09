@@ -36,6 +36,31 @@ import json
 # Default kit identifier (overridden once wardragon_monitor status arrives)
 KIT_ID_DEFAULT = "wardragon-unknown"
 KIT_ID = KIT_ID_DEFAULT
+
+# Fast-path cache file written by wardragon_monitor with the resolved kit serial.
+# Read once at startup so KIT_ID is correct without waiting for the first ZMQ
+# status cycle (which can take 30+ seconds on cold boot due to dmidecode latency).
+KIT_ID_CACHE_PATH = "/var/lib/wardragon/kit-id"
+
+
+def _read_kit_id_cache():
+    """Return cached kit serial from KIT_ID_CACHE_PATH, or None if unavailable.
+
+    Failures are silent — the cache is purely a fast-path optimization. If the
+    file is missing, unreadable, or contains an implausible value, fall back
+    to the existing behavior of waiting for wardragon_monitor's ZMQ status.
+    """
+    try:
+        with open(KIT_ID_CACHE_PATH, "r") as f:
+            value = f.read().strip()
+    except (OSError, IOError):
+        return None
+    if not value or len(value) > 64:
+        return None
+    # Allow alphanumerics plus a small set of safe punctuation seen in vendor serials.
+    if not all(c.isalnum() or c in "-_." for c in value):
+        return None
+    return value
 try:
     from sinks.mqtt_sink import MqttSink
 except Exception:
@@ -1092,6 +1117,20 @@ if __name__ == "__main__":
 
     setup_logging(args.debug)
     logger.info("Starting ZMQ to CoT converter with log level: %s", "DEBUG" if args.debug else "INFO")
+
+    # Seed KIT_ID from the wardragon_monitor cache file if present.
+    # This avoids a 30+ second cold-boot window where MQTT topics can't be
+    # kit-scoped because the serial hasn't been read yet. Cache is written
+    # by wardragon_monitor; if missing/unreadable, we fall back to the
+    # existing ZMQ status path (KIT_ID gets updated on the first message).
+    # No `global` needed: this block runs at module scope under `if __name__`.
+    cached_serial = _read_kit_id_cache()
+    if cached_serial:
+        KIT_ID = f"wardragon-{cached_serial}"
+        logger.info("KIT_ID seeded from cache: %s", KIT_ID)
+    else:
+        logger.debug("kit-id cache unavailable; KIT_ID will be set on first ZMQ status")
+
     _start_rid_lookup_worker()
 
     
