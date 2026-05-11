@@ -82,31 +82,31 @@ class TAKClient:
             time.sleep(1)  # Check every second if connection is available
 
     def send(self, cot_xml: bytes):
-        """Sends a CoT XML message to the TAK server via TCP/TLS."""
+        """Sends a CoT XML message to the TAK server via TCP/TLS.
+
+        Non-blocking by design: if the socket is unavailable, the message is
+        dropped and the background `run_connect_loop` daemon thread handles
+        reconnection. Previously this method would call `connect()` directly,
+        which has an infinite retry loop with `time.sleep`, blocking the
+        entire calling thread (system status, drone publishing, etc.) for
+        as long as the TAK server was unreachable. That cascaded into MQTT,
+        Lattice, and HA discovery never being called from the same thread.
+        """
+        # Fast-fail if no socket. The run_connect_loop daemon thread is
+        # already trying to reconnect in the background once per second.
+        if not self.sock:
+            logger.debug("TAK socket unavailable; dropping CoT message (background reconnect in progress)")
+            return
+
         try:
-            # If socket is missing, try to reconnect BEFORE failing
-            if not self.sock:
-                logger.warning("Socket unavailable, attempting reconnect before send...")
-                with self.connecting_lock:
-                    if not self.sock:  # re-check inside lock
-                        self.connect()
-
-            # If still no socket, fail gracefully
-            if not self.sock:
-                logger.error("No socket available to send CoT message via TCP/TLS.")
-                return
-
-            # Attempt to send
             self.sock.sendall(cot_xml)
             logger.debug(f"Sent CoT message via TCP/TLS: {cot_xml}")
-
         except Exception as e:
             logger.error(f"Error sending CoT message via TCP/TLS: {e}")
+            # close() sets self.sock = None; the daemon thread will reconnect
+            # on its next 1s cycle. Do NOT call self.connect() synchronously
+            # here — it would block the caller indefinitely on a permanent outage.
             self.close()
-
-            # Try reconnecting immediately (restores old behavior)
-            with self.connecting_lock:
-                self.connect()
 
     def close(self):
         """Closes the connection to the TAK server."""
