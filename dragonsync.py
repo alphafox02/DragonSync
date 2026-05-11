@@ -1263,6 +1263,7 @@ if __name__ == "__main__":
                 ha_signal_id=config.get("mqtt_ha_signal_id", "signal_latest"),
                 aircraft_enabled=bool(config.get("mqtt_aircraft_enabled", False)),
                 aircraft_topic=config.get("mqtt_aircraft_topic", "wardragon/aircraft"),
+                kit_id_provider=lambda: KIT_ID,
             )
             logger.info("MQTT sink enabled.")
             if bool(config.get("mqtt_ha_enabled")) and not bool(config.get("mqtt_per_drone_enabled")):

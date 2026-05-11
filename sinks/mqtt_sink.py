@@ -19,8 +19,9 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 try:
     import paho.mqtt.client as mqtt
@@ -85,6 +86,12 @@ class MqttSink:
         ha_enabled: bool = False,
         ha_prefix: str = "homeassistant",
         ha_device_base: str = "wardragon_drone",
+        # Multi-kit support: provider that returns the current kit_id (e.g.
+        # "wardragon-G6PA14100J63"). When set, system/service topics and HA
+        # system device unique IDs are scoped per-kit so multiple kits sharing
+        # one MQTT broker don't collide on retained state. Backward compatible:
+        # if not provided, falls back to a "wardragon-unknown" placeholder.
+        kit_id_provider: Optional[Callable[[], Optional[str]]] = None,
     ) -> None:
         if mqtt is None:
             raise RuntimeError("paho-mqtt not installed but required for MqttSink")
@@ -117,6 +124,13 @@ class MqttSink:
         # system device (WarDragon kit) tracking
         self._ha_system_announced = False
         self._sys_base = "wardragon/system"
+
+        # Multi-kit scoping: provider for the kit_id, plus connect-state
+        # flags used by the lazy-connect background watcher.
+        self._kit_id_provider: Optional[Callable[[], Optional[str]]] = kit_id_provider
+        self._connected: bool = False
+        self._connect_args: Optional[tuple] = None  # (host, port, keepalive); set below
+        self._lazy_connect_thread: Optional[threading.Thread] = None
 
         # --- MQTT client setup (robust across paho v1.x and v2.x) ---
         protocol = getattr(mqtt, "MQTTv5", getattr(mqtt, "MQTTv311"))  # prefer v5 when available
@@ -162,21 +176,43 @@ class MqttSink:
                 _log.critical("MqttSink TLS configuration failed: %s", e)
                 raise
 
-        # Global LWT (service availability)
-        try:
-            self.client.will_set("wardragon/service/availability", "offline", qos=self.qos, retain=True)
-        except Exception:
-            pass
+        # paho restricts Will Topic to be set before connect(). We try to
+        # resolve kit_id synchronously here so warm boots (cache populated)
+        # get full LWT support. Cold first boot (no cache yet) connects
+        # without LWT this run; the kit-id cache populates after wardragon_monitor's
+        # first cycle, so every subsequent boot is warm.
+        initial_kit_id = self._kit_id()
+        if initial_kit_id:
+            try:
+                self.client.will_set(
+                    f"wardragon/service/{initial_kit_id}/availability",
+                    "offline", qos=self.qos, retain=True,
+                )
+            except Exception:
+                pass
+        else:
+            _log.info(
+                "MqttSink: kit_id not yet resolved at startup; connecting "
+                "without LWT this run. Future boots will have full LWT once "
+                "/var/lib/wardragon/kit-id is populated."
+            )
 
         # Callbacks compatible with both API versions
         def _on_connect(client, userdata, flags, rc, properties=None):
             if rc == 0:
                 _log.info("MqttSink connected to %s:%s", host, port)
-                # Birth (service availability online)
-                try:
-                    self.client.publish("wardragon/service/availability", "online", qos=self.qos, retain=True)
-                except Exception:
-                    pass
+                # Birth on the kit-scoped service availability topic. Skipped
+                # silently if kit_id is not known yet — the lazy-connect worker
+                # publishes the online message belatedly once kit_id resolves.
+                kit_id = self._kit_id()
+                if kit_id:
+                    try:
+                        self.client.publish(
+                            f"wardragon/service/{kit_id}/availability",
+                            "online", qos=self.qos, retain=True,
+                        )
+                    except Exception:
+                        pass
             else:
                 _log.warning("MqttSink connect rc=%s", rc)
 
@@ -200,18 +236,29 @@ class MqttSink:
         except Exception:
             pass
 
+        # Connect to the broker immediately. Drone, aircraft, and signal
+        # publishes do NOT depend on kit_id — they're keyed by drone_id /
+        # source — so they should flow from t=0 regardless of kit identity.
+        # Only kit-scoped system/service publishes wait for kit_id (handled
+        # in publish_system and the deferred-online worker below).
         try:
-            # Use async connect so startup won't hang if broker is down; loop will keep retrying
-            self.client.connect_async(host, int(port), keepalive=keepalive)
+            self.client.connect_async(host, int(port), keepalive=int(keepalive))
             self.client.loop_start()
-
-            # Best-effort wait for an initial connection without blocking startup
-            is_conn = getattr(self.client, "is_connected", None)
-            deadline = time.time() + 2.0
-            while callable(is_conn) and not self.client.is_connected() and time.time() < deadline:
-                time.sleep(0.05)
+            self._connected = True
         except Exception as e:
-            _log.warning("MqttSink initial connect_async failed (will retry via loop): %s", e)
+            _log.warning("MqttSink connect_async failed (will retry via paho loop): %s", e)
+
+        # If kit_id wasn't known at construction (cold first boot), spawn a
+        # background watcher that publishes the per-kit "online" message as
+        # soon as kit_id resolves. No reconnect/disconnect — purely a delayed
+        # availability publish for that one boot.
+        if not initial_kit_id:
+            self._lazy_connect_thread = threading.Thread(
+                target=self._publish_kit_online_when_ready,
+                name="mqtt-kit-online-deferred",
+                daemon=True,
+            )
+            self._lazy_connect_thread.start()
 
     # ────────────────────────────────────────────────
     # Public API used by DroneManager
@@ -319,15 +366,28 @@ class MqttSink:
     def close(self) -> None:
         """Stop MQTT loop and disconnect cleanly."""
         try:
-            # mark system offline (and service offline) before disconnect
-            try:
-                self.client.publish(f"{self._sys_base}/availability", "offline", qos=self.qos, retain=True)
-            except Exception:
-                pass
-            try:
-                self.client.publish("wardragon/service/availability", "offline", qos=self.qos, retain=True)
-            except Exception:
-                pass
+            # Mark system + service offline on the per-kit topics before
+            # disconnect. If kit_id never resolved (broken wardragon_monitor
+            # for the entire process lifetime), we have no kit identity to
+            # publish offline against — skip silently rather than pollute the
+            # broker with a placeholder. Drone/aircraft/signal topics are
+            # unaffected by this skip.
+            kit_id_for_close = self._kit_id()
+            if kit_id_for_close:
+                try:
+                    self.client.publish(
+                        f"{self._sys_base}/{kit_id_for_close}/availability",
+                        "offline", qos=self.qos, retain=True,
+                    )
+                except Exception:
+                    pass
+                try:
+                    self.client.publish(
+                        f"wardragon/service/{kit_id_for_close}/availability",
+                        "offline", qos=self.qos, retain=True,
+                    )
+                except Exception:
+                    pass
             if self.signals_topic:
                 try:
                     self.client.publish(f"{self.signals_topic}/availability", "offline", qos=self.qos, retain=True)
@@ -463,6 +523,97 @@ class MqttSink:
                 _log.warning("MQTT publish returned rc=%s", rc)
         except Exception:
             pass
+
+    def _kit_id(self) -> Optional[str]:
+        """Return the current kit_id (slugified for MQTT topic safety) or None.
+
+        Returns None when no provider was supplied, when the provider raises,
+        or when the provider returns the placeholder default ('wardragon-unknown').
+        Callers should treat None as 'kit identity not yet resolved' and skip
+        any kit-scoped publish — never publish to a 'wardragon-unknown' topic
+        as a placeholder, since that pollutes retained state and breaks
+        multi-kit collision-freeness during the startup window.
+        """
+        if self._kit_id_provider is None:
+            return None
+        try:
+            kid = self._kit_id_provider()
+        except Exception:
+            return None
+        if not isinstance(kid, str) or not kid:
+            return None
+        if kid == "wardragon-unknown":
+            return None
+        return _slugify(kid)
+
+    def _publish_kit_online_when_ready(self) -> None:
+        """Background thread: wait for kit_id to resolve, then publish online
+        to the per-kit service availability topic.
+
+        Started only when kit_id was not known at MqttSink construction
+        (cold first boot). The broker connection is already up by this
+        point — drones/aircraft/signals are publishing normally — we just
+        need to belatedly announce kit identity once wardragon_monitor's
+        first status message arrives.
+
+        Polls forever with escalating log severity. If kit_id never resolves
+        (broken wardragon_monitor or missing dmidecode), the kit will be
+        silent on the per-kit service topic, which is the correct
+        professional behavior — operators investigate the underlying issue
+        rather than seeing phantom 'wardragon-unknown' state on the broker.
+        """
+        poll_interval = 0.5
+        elapsed = 0.0
+        warned_2min = False
+        warned_5min = False
+        last_error_log = -1e9
+
+        while True:
+            kit_id = self._kit_id()
+            if kit_id:
+                try:
+                    self.client.publish(
+                        f"wardragon/service/{kit_id}/availability",
+                        "online", qos=self.qos, retain=True,
+                    )
+                    _log.info(
+                        "MqttSink kit_id resolved (%s); per-kit service "
+                        "availability published online", kit_id,
+                    )
+                except Exception as e:
+                    _log.warning("MqttSink belated availability publish failed: %s", e)
+                return
+
+            time.sleep(poll_interval)
+            elapsed += poll_interval
+
+            # Escalating severity: helps operators distinguish "monitor is
+            # warming up" from "monitor is broken" without spamming the log.
+            if elapsed >= 120.0 and not warned_2min:
+                _log.warning(
+                    "MqttSink: kit_id still not resolved after 2 minutes. "
+                    "Check 'systemctl status wardragon-monitor.service' and "
+                    "/var/lib/wardragon/kit-id; per-kit MQTT topics will not "
+                    "publish until kit identity is known."
+                )
+                warned_2min = True
+            if elapsed >= 300.0 and not warned_5min:
+                _log.warning(
+                    "MqttSink: kit_id still not resolved after 5 minutes. "
+                    "wardragon_monitor.service appears unhealthy. Drones, "
+                    "aircraft, and FPV signals continue to publish normally; "
+                    "system telemetry and per-kit availability are deferred "
+                    "until kit identity resolves."
+                )
+                warned_5min = True
+            if elapsed >= 1800.0 and (elapsed - last_error_log) >= 1800.0:
+                _log.error(
+                    "MqttSink: kit_id unresolved for over 30 minutes. The "
+                    "kit cannot self-identify; per-kit MQTT topics remain "
+                    "unpublished. Investigate wardragon_monitor.service and "
+                    "dmidecode availability."
+                )
+                last_error_log = elapsed
 
     def _per_drone_topic(self, drone_id: str) -> str:
         return f"{self.per_drone_base}/{drone_id}"
@@ -820,6 +971,17 @@ class MqttSink:
             pluto_temp = _f_or_none(temps.get("pluto_temp"))
             zynq_temp  = _f_or_none(temps.get("zynq_temp"))
 
+            # Multi-kit scoping: skip kit-level publishes entirely until kit_id
+            # is resolved. This avoids polluting retained state with a placeholder
+            # kit identity during the startup window.
+            kit_id = self._kit_id()
+            if not kit_id:
+                # Defer system publishing until kit_id is known. The kit serial
+                # comes via the same wardragon_monitor pipeline that fed this
+                # status_message; if the message is being processed, the kit_id
+                # cache should also have been written, so this branch is rare.
+                return
+
             if self.ha_enabled and not self._ha_system_announced:
                 self._publish_ha_system_discovery()
                 self._ha_system_announced = True
@@ -843,29 +1005,39 @@ class MqttSink:
                 "gpsd_time_utc": gpsd_time_utc,
                 "updated": int(time.time()),
             }
-            self.client.publish(f"{self._sys_base}/attrs", json.dumps(attrs), qos=self.qos, retain=False)
-            self.client.publish(f"{self._sys_base}/state", "online", qos=self.qos, retain=False)
-            self.client.publish(f"{self._sys_base}/availability", "online", qos=self.qos, retain=True)
+            scoped_base = f"{self._sys_base}/{kit_id}"
+            self.client.publish(f"{scoped_base}/attrs", json.dumps(attrs), qos=self.qos, retain=False)
+            self.client.publish(f"{scoped_base}/state", "online", qos=self.qos, retain=False)
+            self.client.publish(f"{scoped_base}/availability", "online", qos=self.qos, retain=True)
 
         except Exception as e:
             _log.warning("publish_system failed: %s", e)
 
     def _publish_ha_system_discovery(self) -> None:
+        # Multi-kit scoping: each kit registers as its own HA device with unique
+        # IDs derived from kit_id. Skip discovery entirely if kit_id is not yet
+        # known; publish_system retries this on every status cycle until it
+        # succeeds (gated by self._ha_system_announced).
+        kit_id = self._kit_id()
+        if not kit_id:
+            return
+
         device = {
-            "identifiers": [f"{self.ha_device_base}:system"],
-            "name": "WarDragon System",
+            "identifiers": [f"{self.ha_device_base}:{kit_id}:system"],
+            "name": f"WarDragon {kit_id}",
             "manufacturer": "CEMAXECUTER",
             "model": "WarDragon",
         }
-        unique_base = f"{self.ha_device_base}_system"
-        avail = f"{self._sys_base}/availability"
-        state_topic = f"{self._sys_base}/state"
-        attrs_topic = f"{self._sys_base}/attrs"
+        unique_base = f"{self.ha_device_base}_{kit_id}_system"
+        scoped_sys_base = f"{self._sys_base}/{kit_id}"
+        avail = f"{scoped_sys_base}/availability"
+        state_topic = f"{scoped_sys_base}/state"
+        attrs_topic = f"{scoped_sys_base}/attrs"
 
         # device_tracker for kit GPS position
         dt_cfg_topic = f"{self.ha_prefix}/device_tracker/{unique_base}/config"
         dt_payload = {
-            "name": "WarDragon Pro",
+            "name": f"WarDragon {kit_id}",
             "unique_id": unique_base,
             "device": device,
             "source_type": "gps",
@@ -882,7 +1054,7 @@ class MqttSink:
 
         def sensor(uid_suffix: str, name: str, template: str, unit: Optional[str] = None,
                    device_class: Optional[str] = None, icon: Optional[str] = None):
-            uid = f"{self.ha_device_base}_system_{uid_suffix}"
+            uid = f"{self.ha_device_base}_{kit_id}_system_{uid_suffix}"
             cfg = {
                 "name": name,
                 "unique_id": uid,
