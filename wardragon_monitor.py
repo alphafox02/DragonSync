@@ -25,6 +25,7 @@ import signal
 import sys
 import uuid
 import os  # Import os module
+from typing import Optional
 from gps import gps, WATCH_ENABLE, WATCH_NEWSTYLE
 
 import configparser  # Added for gps.ini support
@@ -211,18 +212,48 @@ def get_serial_number(debug=False):
         if debug:
             print(f"Unexpected error retrieving serial number: {e}")
 
-    # If serial number is invalid or not found, try to get MAC address
+    # If serial number is invalid or not found, fall back to a MAC address.
+    # The MAC must be deterministic across boots: psutil's dict iteration order
+    # depends on kernel interface enumeration, which can flip eth0/eth1 between
+    # boots (USB Ethernet timing, systemd-networkd renaming, hotplug order, etc.).
+    # We pin a strict priority: onboard "eth0" first, then sorted eth/en/wlan.
     try:
-        mac_address = None
-        for interface, addrs in psutil.net_if_addrs().items():
-            for addr in addrs:
+        addrs_by_iface = psutil.net_if_addrs()
+
+        def _mac_for(iface: str) -> Optional[str]:
+            for addr in addrs_by_iface.get(iface, []):
                 if addr.family == psutil.AF_LINK:
-                    if interface.startswith(('eth', 'en', 'wlan')):
-                        mac_address = addr.address.replace(':', '').lower()
-                        if mac_address and mac_address != '000000000000':
-                            if debug:
-                                print(f"Using MAC address from interface {interface} as UID: {mac_address}")
-                            return mac_address
+                    mac = addr.address.replace(':', '').lower()
+                    if mac and mac != '000000000000':
+                        return mac
+            return None
+
+        # Tier 1: explicit preferred interface — the Pi5 onboard NIC and most
+        # SBCs/laptops expose this name. Burned-in hardware MAC, stable.
+        mac_address = _mac_for("eth0")
+        if mac_address:
+            if debug:
+                print(f"Using MAC address from interface eth0 as UID: {mac_address}")
+            return mac_address
+
+        # Tier 2: sorted fallback across remaining eth/en/wlan interfaces.
+        # Priority by prefix (eth < en < wlan), then alphabetical within prefix
+        # (eth1 < eth2 < eth10 by natural string order works for typical naming).
+        prefix_priority = ("eth", "en", "wlan")
+        candidates = sorted(
+            (iface for iface in addrs_by_iface
+             if iface != "eth0" and iface.startswith(prefix_priority)),
+            key=lambda i: (
+                next((idx for idx, p in enumerate(prefix_priority) if i.startswith(p)), 99),
+                i,
+            ),
+        )
+        for iface in candidates:
+            mac_address = _mac_for(iface)
+            if mac_address:
+                if debug:
+                    print(f"Using MAC address from interface {iface} as UID: {mac_address}")
+                return mac_address
         # If no MAC address found, generate UUID and store it
         uid_file = '/var/tmp/system_uid.txt'
         if os.path.exists(uid_file):
