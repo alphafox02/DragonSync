@@ -191,7 +191,7 @@ def get_serial_number(debug=False):
     try:
         result = subprocess.run(
             ['sudo', 'dmidecode', '-t', 'system'],
-            capture_output=True, text=True, check=True
+            capture_output=True, text=True, check=True, timeout=10
         )
         output = result.stdout
         serial_number = None
