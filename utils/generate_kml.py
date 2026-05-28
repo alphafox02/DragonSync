@@ -1,22 +1,32 @@
 #!/usr/bin/env python3
+"""
+Generate KML from a drone CSV log produced by drone_logger.py.
+
+Uses lxml (already a DragonSync dependency) instead of simplekml, so the
+kit image needs no extra package. KML is just XML in the OGC 2.2 namespace.
+"""
 import csv
-import simplekml
 import argparse
 from collections import defaultdict
-from datetime import datetime
+from lxml import etree
+
+KML_NS = "http://www.opengis.net/kml/2.2"
+
+
+def _coord_str(lon, lat, alt):
+    return f"{lon},{lat},{alt}"
+
 
 def csv_to_kml(input_csv, output_kml, tracks=False):
     """
     Reads 'input_csv' and writes 'output_kml'.
     If 'tracks' is False, creates individual Placemarks for each row.
-    If 'tracks' is True, creates a separate linestring track for each drone_id.
+    If 'tracks' is True, creates a separate LineString track per drone_id.
     """
-    # We'll store rows grouped by drone_id when creating tracks.
-    # For placemarks, we can just iterate over the file once.
-    kml = simplekml.Kml()
+    kml = etree.Element("{%s}kml" % KML_NS, nsmap={None: KML_NS})
+    document = etree.SubElement(kml, "Document")
 
     if tracks:
-        # Gather coordinates for each drone_id
         drone_coords = defaultdict(list)
         with open(input_csv, 'r') as f:
             reader = csv.DictReader(f)
@@ -25,21 +35,21 @@ def csv_to_kml(input_csv, output_kml, tracks=False):
                 lat = float(row['lat'])
                 lon = float(row['lon'])
                 alt = float(row['alt'])
-                # Build up a list of (lon, lat, alt) coords for that drone
                 drone_coords[drone_id].append((lon, lat, alt))
 
-        # For each drone, create a linestring
         for drone_id, coords in drone_coords.items():
             if not coords:
                 continue
-
-            linestring = kml.newlinestring(name=f"Track for {drone_id}")
-            linestring.coords = coords
-            linestring.altitudemode = simplekml.AltitudeMode.absolute
-            linestring.extrude = 1  # So it extrudes down to the ground if viewed in Google Earth
+            placemark = etree.SubElement(document, "Placemark")
+            etree.SubElement(placemark, "name").text = f"Track for {drone_id}"
+            linestring = etree.SubElement(placemark, "LineString")
+            etree.SubElement(linestring, "extrude").text = "1"
+            etree.SubElement(linestring, "altitudeMode").text = "absolute"
+            etree.SubElement(linestring, "coordinates").text = " ".join(
+                _coord_str(lon, lat, alt) for (lon, lat, alt) in coords
+            )
 
     else:
-        # Create a single Placemark for each row in CSV
         with open(input_csv, 'r') as f:
             reader = csv.DictReader(f)
             for row in reader:
@@ -53,14 +63,15 @@ def csv_to_kml(input_csv, output_kml, tracks=False):
                         f"Alt: {alt}\n"
                         f"Lat/Lon: {lat}, {lon}")
 
-                pnt = kml.newpoint(
-                    name=f"{drone_id}",
-                    coords=[(lon, lat, alt)]
-                )
-                pnt.description = desc
-                pnt.altitudemode = simplekml.AltitudeMode.absolute
+                placemark = etree.SubElement(document, "Placemark")
+                etree.SubElement(placemark, "name").text = str(drone_id)
+                etree.SubElement(placemark, "description").text = desc
+                point = etree.SubElement(placemark, "Point")
+                etree.SubElement(point, "altitudeMode").text = "absolute"
+                etree.SubElement(point, "coordinates").text = _coord_str(lon, lat, alt)
 
-    kml.save(output_kml)
+    tree = etree.ElementTree(kml)
+    tree.write(output_kml, pretty_print=True, xml_declaration=True, encoding="UTF-8")
     print(f"KML saved to {output_kml}")
 
 
@@ -73,6 +84,7 @@ def main():
     args = parser.parse_args()
 
     csv_to_kml(args.csv, args.kml, tracks=args.tracks)
+
 
 if __name__ == "__main__":
     main()

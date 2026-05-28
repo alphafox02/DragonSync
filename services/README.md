@@ -33,6 +33,24 @@ dji_receiver.py              droneid (native)    droneid (-g)    droneid (-uart)
                          TAK / MQTT / Lattice / CoT
 ```
 
+## Optional Services
+
+| Service | Binary / Script | Source Repo | ZMQ Port | Description |
+|---------|----------------|-------------|----------|-------------|
+| `drone-logger` | `/home/dragon/WarDragon/DragonSync/utils/drone_logger.py` | [DragonSync](https://github.com/alphafox02/DragonSync) | sub 4224, 4225 | Offline SQLite/CSV drone logger (for `utils/log_viewer.py`) |
+
+`drone-logger` is **opt-in and not enabled by default** — it duplicates telemetry to a local SQLite database for offline review with `utils/log_viewer.py`. The shipped unit logs to `logs/drones.sqlite` with daily rotation (7-day retention) and reads the status port (4225) so the `seen_by` column is populated with this kit's serial.
+
+To enable it on a kit:
+
+```bash
+sudo cp services/drone-logger.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now drone-logger
+```
+
+Add `--rid-enabled` (and optionally `--rid-api`) to the `ExecStart` line to enrich rows with FAA Remote ID make/model — requires the `faa-rid-lookup` submodule (`git submodule update --init`).
+
 ## Legacy Services (zmqToTar1090)
 
 | Service | Description |

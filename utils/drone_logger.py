@@ -13,6 +13,27 @@ from pathlib import Path
 from datetime import datetime
 from math import radians, sin, cos, asin, sqrt
 
+# Mirror of dragonsync.py UA_TYPE_MAPPING (ASTM F3411 / RID UA types, stable enum).
+# Kept inline so this logger stays standalone (runnable without the full package).
+UA_TYPE_MAPPING = {
+    0: 'No UA type defined',
+    1: 'Aeroplane/Airplane (Fixed wing)',
+    2: 'Helicopter or Multirotor',
+    3: 'Gyroplane',
+    4: 'VTOL (Vertical Take-Off and Landing)',
+    5: 'Ornithopter',
+    6: 'Glider',
+    7: 'Kite',
+    8: 'Free Balloon',
+    9: 'Captive Balloon',
+    10: 'Airship (Blimp)',
+    11: 'Free Fall/Parachute',
+    12: 'Rocket',
+    13: 'Tethered powered aircraft',
+    14: 'Ground Obstacle',
+    15: 'Other type',
+}
+
 def haversine_m(lat1, lon1, lat2, lon2):
     try:
         lat1, lon1, lat2, lon2 = float(lat1), float(lon1), float(lat2), float(lon2)
@@ -41,10 +62,18 @@ def parse_drone_message(message, logger):
             dst[k] = v
 
     def parse_one(obj):
+        # Field placement mirrors core/telemetry_parser.py (the authoritative
+        # parser). Keep the two in sync: each datum is read from the SAME
+        # sub-message DragonSync's main pipeline reads it from.
         if not isinstance(obj, dict):
             return {}
         out = {}
 
+        # top-level flat extras (ESP32 dict carries these)
+        if "index" in obj:   out["index"]   = obj.get("index")
+        if "runtime" in obj: out["runtime"] = obj.get("runtime")
+
+        # BLE long-range advert (AUX_ADV_IND / aext)
         aux = obj.get("AUX_ADV_IND")
         if isinstance(aux, dict) and "rssi" in aux:
             out["rssi"] = aux["rssi"]
@@ -54,14 +83,31 @@ def parse_drone_message(message, logger):
             if isinstance(adv, str):
                 out["mac"] = adv.split()[0]
 
+        # top-level MAC/RSSI (DJI/AntSDR list sometimes places these here)
+        if "MAC" in obj:  out["mac"]  = obj["MAC"]
+        if "RSSI" in obj: out["rssi"] = obj["RSSI"]
+
         bid = obj.get("Basic ID")
         if isinstance(bid, dict):
             id_type = bid.get("id_type")
-            out["mac"]  = bid.get("MAC", out.get("mac", ""))
-            out["rssi"] = bid.get("RSSI", out.get("rssi", 0.0))
-            if id_type in ("Serial Number (ANSI/CTA-2063-A)", "CAA Assigned Registration ID"):
+            out["id_type"]   = id_type
+            out["mac"]       = bid.get("MAC", out.get("mac", ""))
+            out["rssi"]      = bid.get("RSSI", out.get("rssi", 0.0))
+            out["ua_type"]   = bid.get("ua_type")
+            out["transport"] = bid.get("transport", out.get("transport", ""))
+            # droneid-go provides frequency_mhz in Basic ID; prefer it over Frequency Message
+            basic_freq = get_float(bid.get("frequency_mhz", None), None)
+            if basic_freq is not None:
+                out["freq"] = basic_freq
+            if id_type == "Serial Number (ANSI/CTA-2063-A)":
                 out.setdefault("id", bid.get("id", "unknown"))
-            out["id_type"] = id_type
+            elif id_type == "CAA Assigned Registration ID":
+                out["caa"] = bid.get("id", out.get("caa"))
+
+        op = obj.get("Operator ID Message")
+        if isinstance(op, dict):
+            out["operator_id_type"] = op.get("operator_id_type", "")
+            out["operator_id"]      = op.get("operator_id", "")
 
         lvm = obj.get("Location/Vector Message")
         if isinstance(lvm, dict):
@@ -71,17 +117,18 @@ def parse_drone_message(message, logger):
             out["vspeed"] = get_float(lvm.get("vert_speed", 0.0))
             out["alt"]    = get_float(lvm.get("geodetic_altitude", 0.0))
             out["height"] = get_float(lvm.get("height_agl", 0.0))
-            out["direction"] = get_float(lvm.get("direction"), None)
-            out["pressure_altitude"] = get_float(lvm.get("pressure_altitude"), None)
+            out["op_status"]           = lvm.get("op_status", "")
+            out["height_type"]         = lvm.get("height_type", "")
+            out["ew_dir"]              = lvm.get("ew_dir_segment", "")
+            out["direction"]           = get_float(lvm.get("direction"), None)
+            out["speed_multiplier"]    = lvm.get("speed_multiplier")
+            out["pressure_altitude"]   = get_float(lvm.get("pressure_altitude"), None)
             out["vertical_accuracy"]   = lvm.get("vertical_accuracy")
             out["horizontal_accuracy"] = lvm.get("horizontal_accuracy")
             out["baro_accuracy"]       = lvm.get("baro_accuracy")
             out["speed_accuracy"]      = lvm.get("speed_accuracy")
-            out["height_type"]         = lvm.get("height_type")
             out["timestamp"]           = lvm.get("timestamp")
             out["timestamp_accuracy"]  = lvm.get("timestamp_accuracy")
-            out["ew_dir"]              = lvm.get("ew_dir")
-            out["speed_multiplier"]    = lvm.get("speed_multiplier")
 
         sid = obj.get("Self-ID Message")
         if isinstance(sid, dict):
@@ -89,21 +136,21 @@ def parse_drone_message(message, logger):
 
         sysm = obj.get("System Message")
         if isinstance(sysm, dict):
-            out["pilot_lat"] = get_float(sysm.get("latitude", 0.0))
-            out["pilot_lon"] = get_float(sysm.get("longitude", 0.0))
+            # ESP32 dict uses operator_lat/operator_lon; DJI list uses latitude/longitude
+            out["pilot_lat"] = get_float(sysm.get("operator_lat", sysm.get("latitude", 0.0)))
+            out["pilot_lon"] = get_float(sysm.get("operator_lon", sysm.get("longitude", 0.0)))
             out["home_lat"]  = get_float(sysm.get("home_lat", 0.0))
             out["home_lon"]  = get_float(sysm.get("home_lon", 0.0))
-            out["operator_id_type"] = sysm.get("operator_id_type")
-            out["operator_id"]      = sysm.get("operator_id")
-            out["op_status"]        = sysm.get("op_status")
-            out["ua_type"]          = sysm.get("ua_type")
-            out["ua_type_name"]     = sysm.get("ua_type_name")
 
-        # flat extras sometimes present
-        out["freq"]   = obj.get("freq", out.get("freq"))
-        out["caa"]    = obj.get("caa",  out.get("caa"))
-        out["index"]  = obj.get("index", out.get("index"))
-        out["runtime"]= obj.get("runtime", out.get("runtime"))
+        fobj = obj.get("Frequency Message")
+        if isinstance(fobj, dict):
+            f = get_float(fobj.get("frequency", None), None)
+            if f is not None:
+                out["freq"] = f
+
+        # flat extras occasionally present at top level
+        if "freq" in obj: out["freq"] = obj.get("freq", out.get("freq"))
+        if "caa"  in obj: out["caa"]  = obj.get("caa",  out.get("caa"))
 
         return out
 
@@ -134,12 +181,26 @@ def parse_drone_message(message, logger):
     drone_info.setdefault('pilot_lon', 0.0)
     drone_info.setdefault('mac', "")
 
+    # derive ua_type_name from the mapping (mirrors telemetry_parser._ua_code_and_name)
+    raw_ua = drone_info.get("ua_type")
+    ua_code = None
+    if raw_ua is not None and raw_ua != "":
+        try:
+            ua_code = int(raw_ua)
+        except (TypeError, ValueError):
+            ua_code = next((k for k, v in UA_TYPE_MAPPING.items()
+                            if v.lower() == str(raw_ua).lower()), None)
+    if ua_code not in UA_TYPE_MAPPING:
+        ua_code = None
+    drone_info["ua_type"] = ua_code if ua_code is not None else ""
+    drone_info["ua_type_name"] = UA_TYPE_MAPPING.get(ua_code, "Unknown")
+
     # extended defaults
     for k in [
-        "home_lat","home_lon","ua_type","ua_type_name","operator_id_type","operator_id","op_status",
+        "home_lat","home_lon","operator_id_type","operator_id","op_status",
         "height","height_type","direction","vspeed","ew_dir","speed_multiplier","pressure_altitude",
         "vertical_accuracy","horizontal_accuracy","baro_accuracy","speed_accuracy",
-        "timestamp","timestamp_accuracy","index","runtime","caa","freq"
+        "timestamp","timestamp_accuracy","index","runtime","caa","freq","transport"
     ]:
         drone_info.setdefault(k, "")
 
@@ -282,13 +343,15 @@ def main():
     socket.connect(f"tcp://{args.zmq_host}:{args.zmq_port}")
     socket.setsockopt_string(zmq.SUBSCRIBE, "")
 
-    # Optional status socket for system location
+    # Status socket: connect whenever a status port is given. It provides the
+    # kit serial used for the seen_by column (multi-kit attribution) and, when
+    # --include-system-location is set, the system GPS columns too.
     status_socket = None
-    if args.include_system_location and args.zmq_status_port:
+    if args.zmq_status_port:
         status_socket = context.socket(zmq.SUB)
         status_socket.connect(f"tcp://{args.zmq_host}:{args.zmq_status_port}")
         status_socket.setsockopt_string(zmq.SUBSCRIBE, "")
-        logger.info(f"Connected to system status ZMQ at tcp://{args.zmq_host}:{args.zmq_status_port}")
+        logger.info(f"Connected to system status ZMQ at tcp://{args.zmq_host}:{args.zmq_status_port} (kit id for seen_by)")
     elif args.include_system_location:
         logger.warning("--include-system-location set but no --zmq-status-port provided. System location will be 0.0")
 
@@ -307,10 +370,12 @@ def main():
         "vertical_accuracy","horizontal_accuracy","baro_accuracy","speed_accuracy",
         "timestamp_src","timestamp_accuracy","index","runtime","caa","freq",
         # FAA RID enrichment (optional; blanks if not available)
-        "rid_make","rid_model","rid_source"
+        "rid_make","rid_model","rid_source",
+        # transport + multi-kit attribution
+        "transport","observed_at","seen_by"
     ]
 
-    SQLITE_PLACEHOLDERS = ",".join(["?"] * 38)
+    SQLITE_PLACEHOLDERS = ",".join(["?"] * 41)
     sqlite_insert_sql = f"""
         INSERT INTO logs (
             ts, drone_id, lat, lon, alt, speed, rssi, mac, description, pilot_lat, pilot_lon,
@@ -318,7 +383,8 @@ def main():
             height, height_type, direction, vspeed, ew_dir, speed_multiplier, pressure_altitude,
             vertical_accuracy, horizontal_accuracy, baro_accuracy, speed_accuracy,
             timestamp_src, timestamp_accuracy, idx, runtime, caa, freq,
-            rid_make, rid_model, rid_source
+            rid_make, rid_model, rid_source,
+            transport, observed_at, seen_by
         ) VALUES ({SQLITE_PLACEHOLDERS})
     """
     if args.include_system_location:
@@ -406,9 +472,15 @@ def main():
                 vertical_accuracy TEXT, horizontal_accuracy TEXT, baro_accuracy TEXT, speed_accuracy TEXT,
                 timestamp_src TEXT, timestamp_accuracy TEXT, idx INTEGER, runtime REAL,
                 caa TEXT, freq REAL,
-                rid_make TEXT, rid_model TEXT, rid_source TEXT
+                rid_make TEXT, rid_model TEXT, rid_source TEXT,
+                transport TEXT, observed_at REAL, seen_by TEXT
             )
         """)
+        # Migrate older databases that predate the transport/observed_at/seen_by columns
+        existing_cols = {row[1] for row in sqlite_cur.execute("PRAGMA table_info(logs)")}
+        for col, coltype in (("transport", "TEXT"), ("observed_at", "REAL"), ("seen_by", "TEXT")):
+            if col not in existing_cols:
+                sqlite_cur.execute(f"ALTER TABLE logs ADD COLUMN {col} {coltype}")
         sqlite_cur.execute("CREATE INDEX IF NOT EXISTS idx_logs_ts ON logs(ts)")
         sqlite_cur.execute("CREATE INDEX IF NOT EXISTS idx_logs_drone ON logs(drone_id)")
         _sqlite_prune_old()
@@ -520,7 +592,9 @@ def main():
                         parsed["timestamp"], parsed["timestamp_accuracy"], parsed["index"], parsed["runtime"],
                         parsed["caa"], parsed["freq"],
                         # FAA RID enrichment (blanks when not present)
-                        rid_info.get("make"), rid_info.get("model"), rid_info.get("source")
+                        rid_info.get("make"), rid_info.get("model"), rid_info.get("source"),
+                        # transport + multi-kit attribution
+                        parsed["transport"], now_ts, system_location["id"]
                     ]
                     csv_row = list(row_base)
                     if args.include_system_location:

@@ -1,0 +1,19 @@
+[Unit]
+Description=DragonSync Drone Logger (offline SQLite/CSV)
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=dragon
+WorkingDirectory=/home/dragon/WarDragon/DragonSync
+ExecStart=/usr/bin/python3 /home/dragon/WarDragon/DragonSync/utils/drone_logger.py \
+    --sqlite /home/dragon/WarDragon/DragonSync/logs/drones.sqlite \
+    --sqlite-rotate-daily \
+    --sqlite-retain-days 7 \
+    --zmq-status-port 4225
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

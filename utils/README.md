@@ -1,5 +1,31 @@
 # Utils: Drone Logging and Offline Viewer
 
+## Dependencies (kit image)
+
+These tools are deliberately light. On Debian (WarDragon kit image), install via apt:
+
+```bash
+sudo apt install python3-zmq python3-lxml python3-requests
+```
+
+| Package | Used by | Notes |
+|---------|---------|-------|
+| `python3-zmq` | `drone_logger.py` | ZMQ SUB socket |
+| `python3-lxml` | `generate_kml.py` | KML output (also used by the main app) |
+| `python3-requests` | `faa-rid-lookup` (optional RID) | only needed with `--rid-enabled` |
+
+`log_viewer.py` is pure Python standard library (no install needed). It does load Leaflet and map tiles from the internet, so on an air-gapped kit the map needs previously-cached tiles.
+
+`generate_kml.py` uses `lxml`, **not** `simplekml` — `simplekml` is not packaged for Debian 13 and `lxml` is already a DragonSync dependency, so the kit image needs no extra package for KML export.
+
+FAA RID enrichment (`--rid-enabled`) needs the `faa-rid-lookup` submodule populated:
+
+```bash
+git submodule update --init faa-rid-lookup
+```
+
+An optional systemd unit to run the logger on boot is provided at `services/drone-logger.service` (disabled by default — see `services/README.md`).
+
 ## Drone Logger (drone_logger.py)
 
 **What it logs:**
@@ -60,7 +86,9 @@ python utils/drone_logger.py \
 - `--zmq-status-port` - Status socket port (default: 5557)
 
 **Database schema:**
-Logs include: timestamp, drone_id, lat, lon, alt, speed, pilot location, home location, MAC, RSSI, freq, UA type, operator ID, and FAA RID fields (make, model, source).
+Logs include: timestamp, drone_id, lat, lon, alt, speed, pilot location, home location, MAC, RSSI, freq, UA type, operator ID, FAA RID fields (make, model, source), `transport` (WiFi/BLE/etc.), `observed_at` (epoch seconds), and `seen_by` (kit serial, for multi-kit attribution).
+
+Field parsing mirrors `core/telemetry_parser.py` (the authoritative pipeline parser); keep the two in sync when the ZMQ message shape changes. Older SQLite databases are migrated automatically (the `transport` / `observed_at` / `seen_by` columns are added on open).
 
 ---
 
@@ -69,7 +97,7 @@ Logs include: timestamp, drone_id, lat, lon, alt, speed, pilot location, home lo
 **What it does:**
 - Web-based map + table viewer for drone SQLite logs
 - Leaflet.js interactive map (can work offline with cached tiles)
-- Filter by drone ID, RID make/model/source, time range
+- Filter by drone ID, RID make/model/source, seen-by kit, time range
 - Live auto-refresh option for active operations
 - CSV export of filtered results
 
@@ -94,7 +122,7 @@ Then open `http://127.0.0.1:5001` in your browser.
 **Features:**
 - Leaflet.js map with zoom, pan, layer controls
 - Offline-capable (uses cached tiles when available)
-- Real-time filters (drone ID, RID make/model/source)
+- Real-time filters (drone ID, RID make/model/source, seen-by kit)
 - Time range selection with better date picker
 - Display limit (500/1000/5000/all)
 - Click drone → show full track history with timeline

@@ -91,6 +91,7 @@ INDEX_HTML = """<!doctype html>
           <label>RID Make <input id="f-make" placeholder="DJI" /></label>
           <label>RID Model <input id="f-model" placeholder="M30T" /></label>
           <label>RID Source <input id="f-source" placeholder="local/api" /></label>
+          <label>Seen By (kit) <input id="f-seen_by" placeholder="wardragon-..." /></label>
           <label>Limit <input id="f-limit" type="number" value="500" min="1" max="5000" /></label>
         </div>
         <div class="controls">
@@ -205,12 +206,16 @@ INDEX_HTML = """<!doctype html>
           : '';
         const caaInfo = latest.caa ? `<strong>CAA ID:</strong> ${latest.caa}<br>` : '';
         const opInfo = latest.operator_id ? `<strong>Operator:</strong> ${latest.operator_id}<br>` : '';
+        const transportInfo = latest.transport ? `<strong>Transport:</strong> ${latest.transport}<br>` : '';
+        const seenByInfo = latest.seen_by ? `<strong>Seen by:</strong> ${latest.seen_by}<br>` : '';
 
         marker.bindPopup(`
           <strong>Drone:</strong> ${droneId}<br>
           ${ridInfo}
           ${caaInfo}
           ${opInfo}
+          ${transportInfo}
+          ${seenByInfo}
           <strong>Alt:</strong> ${(latest.alt || 0).toFixed(1)}m<br>
           <strong>Speed:</strong> ${(latest.speed || 0).toFixed(1)}m/s<br>
           <strong>RSSI:</strong> ${latest.rssi}dBm<br>
@@ -300,7 +305,7 @@ INDEX_HTML = """<!doctype html>
       const params = new URLSearchParams();
       const limit = document.getElementById('f-limit').value || '500';
       params.set('limit', limit);
-      ['id','make','model','source'].forEach(k=>{
+      ['id','make','model','source','seen_by'].forEach(k=>{
         const v = document.getElementById('f-'+k).value.trim();
         if (v) params.set(k, v);
       });
@@ -357,7 +362,7 @@ INDEX_HTML = """<!doctype html>
 
     document.getElementById('btn-apply').addEventListener('click', loadRecords);
     document.getElementById('btn-clear').addEventListener('click', ()=>{
-      ['id','make','model','source','start','end'].forEach(k=>{
+      ['id','make','model','source','seen_by','start','end'].forEach(k=>{
         document.getElementById('f-'+k).value = '';
       });
       loadRecords();
@@ -391,7 +396,8 @@ def fetch_records(conn, filters, limit=500):
                height, height_type, direction, vspeed, ew_dir, speed_multiplier, pressure_altitude,
                vertical_accuracy, horizontal_accuracy, baro_accuracy, speed_accuracy,
                timestamp_src, timestamp_accuracy, idx, runtime, caa, freq,
-               rid_make, rid_model, rid_source
+               rid_make, rid_model, rid_source,
+               transport, observed_at, seen_by
         FROM logs
         WHERE 1=1
     """
@@ -408,6 +414,9 @@ def fetch_records(conn, filters, limit=500):
     if "source" in filters:
         sql += " AND rid_source LIKE ?"
         args.append(f"%{filters['source']}%")
+    if "seen_by" in filters:
+        sql += " AND seen_by LIKE ?"
+        args.append(f"%{filters['seen_by']}%")
     if "start" in filters:
         sql += " AND ts >= ?"
         args.append(filters["start"])
@@ -439,7 +448,8 @@ def export_csv(conn):
         SELECT ts, drone_id, lat, lon, alt, speed, rssi, mac,
                pilot_lat, pilot_lon, home_lat, home_lon,
                ua_type_name, operator_id, caa, freq,
-               rid_make, rid_model, rid_source
+               rid_make, rid_model, rid_source,
+               transport, observed_at, seen_by
         FROM logs
         ORDER BY ts DESC
     """
@@ -475,7 +485,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
         if path == "/api/records":
             qs = parse_qs(parsed.query)
             filters = {}
-            for k in ["id", "make", "model", "source", "start", "end"]:
+            for k in ["id", "make", "model", "source", "seen_by", "start", "end"]:
                 if k in qs:
                     filters[k] = qs[k][0]
             limit = int(qs.get("limit", [500])[0])
