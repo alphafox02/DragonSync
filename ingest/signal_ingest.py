@@ -28,6 +28,21 @@ import zmq
 
 logger = logging.getLogger(__name__)
 
+# Accepted Signal Info.source values. Strict equality (substring match
+# would admit unrecognized labels). Drone-dict elevation is gated
+# downstream on has_mavlink == True.
+_ACCEPTED_SIGNAL_SOURCES = frozenset({
+    "confirm",            # FPV PAL/NTSC comb confirmation
+    "sik_confirm",        # SiK RF/hop-pattern confirmation
+    "sik_alive_no_gps",   # SiK CRC-clean MAVLink, no GPS lock
+    "sik_reasm",          # SiK CRC-clean MAVLink position update
+    "sik_gps_repaired",   # SiK soft-CRC-repaired position update
+    "sik_position_hint",  # SiK multi-frame consensus, approximate
+})
+
+# Firehose-rate; drop silently to keep the unknown-source log useful.
+_IGNORED_SIGNAL_SOURCES = frozenset({"energy"})
+
 
 def _now_utc() -> datetime.datetime:
     return datetime.datetime.utcnow()
@@ -201,7 +216,10 @@ def start_signal_worker(
                     if not alert:
                         continue
                     source_val = alert.get("source") or ""
-                    if confirm_only and "confirm" not in source_val:
+                    if confirm_only and source_val not in _ACCEPTED_SIGNAL_SOURCES:
+                        if source_val and source_val not in _IGNORED_SIGNAL_SOURCES:
+                            logger.debug(
+                                "signal_ingest: dropped unknown source=%r", source_val)
                         continue
 
                     center_hz = alert.get("center_hz")
