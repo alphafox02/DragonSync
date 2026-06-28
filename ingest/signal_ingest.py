@@ -119,6 +119,30 @@ def _parse_fpv_alert(message: Any) -> Optional[Dict[str, Any]]:
     return data
 
 
+def _compute_signal_uid(alert: Dict[str, Any]) -> str:
+    """Pick the stable CoT/MQTT UID for a parsed Signal Info alert.
+
+    SiK is FHSS — using the hopping frequency would generate a new ATAK
+    marker per hop. Net ID is the radio's logical address, so one UID per
+    Net ID keeps the marker stable while still separating distinct SiK
+    drones. FPV has no Net ID; the channel frequency IS the identifier.
+    """
+    signal_type = alert.get("signal_type") or "fpv"
+    net_id = alert.get("net_id")
+    if signal_type == "gfsk_fhss" and net_id is not None:
+        return f"gfsk_fhss-netid-{net_id}"
+
+    center_hz = alert.get("center_hz")
+    try:
+        center_mhz = int(round(float(center_hz) / 1e6))
+    except (TypeError, ValueError):
+        center_mhz = None
+    if center_mhz is not None:
+        return f"{signal_type}-alert-{center_mhz}MHz"
+
+    return alert.get("alert_id") or f"{signal_type}-alert-unknown"
+
+
 def _build_cot(
     alert: Dict[str, Any],
     lat: float,
@@ -222,16 +246,8 @@ def start_signal_worker(
                                 "signal_ingest: dropped unknown source=%r", source_val)
                         continue
 
-                    center_hz = alert.get("center_hz")
-                    try:
-                        center_mhz = int(round(float(center_hz) / 1e6))
-                    except (TypeError, ValueError):
-                        center_mhz = None
                     signal_type = alert.get("signal_type") or "fpv"
-                    if center_mhz is not None:
-                        uid = f"{signal_type}-alert-{center_mhz}MHz"
-                    else:
-                        uid = alert.get("alert_id") or f"{signal_type}-alert-unknown"
+                    uid = _compute_signal_uid(alert)
                     source = alert.get("source") or "unknown"
                     alert_id = alert.get("alert_id")
                     now = time.time()
