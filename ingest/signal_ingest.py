@@ -122,6 +122,9 @@ def _parse_fpv_alert(message: Any) -> Optional[Dict[str, Any]]:
             data["sensor_lat"] = loc.get("latitude")
             data["sensor_lon"] = loc.get("longitude")
             data["sensor_alt"] = _parse_number_with_unit(loc.get("geodetic_altitude"))
+            data["speed"] = _parse_number_with_unit(loc.get("speed"))
+            data["vert_speed"] = _parse_number_with_unit(loc.get("vert_speed"))
+            data["height_agl"] = _parse_number_with_unit(loc.get("height_agl"))
             data["direction"] = loc.get("direction")
             data["op_status"] = loc.get("op_status")
         if "Self-ID Message" in item:
@@ -405,14 +408,17 @@ def start_signal_worker(
                                 desc_parts.append("MAVLink")
                             description = alert.get("self_id") or " ".join(desc_parts)
 
+                            drone_speed = alert.get("speed") or 0.0
+                            drone_vspeed = alert.get("vert_speed") or 0.0
+                            drone_height = alert.get("height_agl") or 0.0
                             drone = Drone(
                                 id=drone_id,
                                 lat=drone_lat,
                                 lon=drone_lon,
-                                speed=0.0,
-                                vspeed=0.0,
+                                speed=float(drone_speed),
+                                vspeed=float(drone_vspeed),
                                 alt=drone_alt,
-                                height=0.0,
+                                height=float(drone_height),
                                 pilot_lat=0.0,
                                 pilot_lon=0.0,
                                 description=description,
