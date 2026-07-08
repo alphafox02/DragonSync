@@ -222,6 +222,23 @@ class DroneManager:
                 else:
                     self._add_unverified_drone(drone_id, drone_data)
 
+    def touch(self, drone_id: str) -> bool:
+        """Refresh last_update_time for an existing drone without moving position.
+
+        Used by RF-only signals (e.g. SiK confirms without decoded GPS) to
+        keep an already-elevated drone alive under inactivity_timeout while
+        preserving the last known drone-GPS coords. Returns True if the
+        drone was present and touched, False otherwise.
+
+        Thread-safe: Protected by internal lock.
+        """
+        with self._lock:
+            drone = self.drone_dict.get(drone_id)
+            if drone is None:
+                return False
+            drone.last_update_time = time.time()
+            return True
+
     def get_drone_by_mac(self, mac: str) -> Optional[Drone]:
         """Look up drone by MAC address (O(1) using index).
 

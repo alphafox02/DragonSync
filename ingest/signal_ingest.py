@@ -43,6 +43,17 @@ _ACCEPTED_SIGNAL_SOURCES = frozenset({
 # Firehose-rate; drop silently to keep the unknown-source log useful.
 _IGNORED_SIGNAL_SOURCES = frozenset({"energy"})
 
+# Sources that carry drone position updates. These bypass the per-UID
+# min_send_interval throttle because SiK confirm and reasm share a Net-ID
+# UID by design (keeps the ATAK marker stable per drone), and confirms
+# arrive more frequently than reasms — without this exemption, every
+# reasm would land inside a recent confirm's throttle window and never
+# reach drone-dict elevation.
+_UNTHROTTLED_SIGNAL_SOURCES = frozenset({
+    "sik_reasm",          # SiK CRC-clean MAVLink position update
+    "sik_gps_repaired",   # SiK soft-CRC-repaired position update
+})
+
 
 def _now_utc() -> datetime.datetime:
     return datetime.datetime.utcnow()
@@ -253,7 +264,8 @@ def start_signal_worker(
                     now = time.time()
                     last = last_sent.get(uid, 0.0)
                     if now - last < min_send_interval:
-                        continue
+                        if source_val not in _UNTHROTTLED_SIGNAL_SOURCES:
+                            continue
                     last_sent[uid] = now
 
                     sensor_lat = alert.get("sensor_lat")
@@ -339,6 +351,15 @@ def start_signal_worker(
                     # When no GPS, use receiver position (we know it exists).
                     net_id = alert.get("net_id")
                     has_mav = alert.get("has_mavlink") is True
+                    if drone_manager is not None and net_id is not None and not has_mav:
+                        # RF-only signal (e.g. sik_confirm without decoded
+                        # GPS) for a Net ID that a prior CRC-clean position
+                        # update already elevated. Refresh last_update_time
+                        # so the drone stays inside inactivity_timeout while
+                        # RF is present, but do not overwrite the last known
+                        # drone-GPS position with the receiver's position.
+                        drone_id = f"drone-900FHSS-NETID-{net_id}"
+                        drone_manager.touch(drone_id)
                     if drone_manager is not None and net_id is not None and has_mav:
                         try:
                             from core.drone import Drone
