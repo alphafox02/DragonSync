@@ -59,6 +59,29 @@ def _now_utc() -> datetime.datetime:
     return datetime.datetime.utcnow()
 
 
+def _parse_number_with_unit(value: Any) -> Optional[float]:
+    """Parse a Location/Vector Message numeric field.
+
+    DragonSig's FPV emit sends bare JSON numbers (104.25) while its SiK
+    emit wraps the same fields as F3411-style strings with unit suffixes
+    ("104.250000 m" or "0.0 m/s"). Accept both by stripping any
+    whitespace-separated tail on strings before float().
+    """
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        head = value.strip().split(None, 1)[0] if value.strip() else ""
+        if not head:
+            return None
+        try:
+            return float(head)
+        except ValueError:
+            return None
+    return None
+
+
 def _stable_offset(seed: str, radius_m: float) -> Tuple[float, float]:
     if radius_m <= 0:
         return 0.0, 0.0
@@ -98,7 +121,7 @@ def _parse_fpv_alert(message: Any) -> Optional[Dict[str, Any]]:
             loc = item["Location/Vector Message"]
             data["sensor_lat"] = loc.get("latitude")
             data["sensor_lon"] = loc.get("longitude")
-            data["sensor_alt"] = loc.get("geodetic_altitude")
+            data["sensor_alt"] = _parse_number_with_unit(loc.get("geodetic_altitude"))
             data["direction"] = loc.get("direction")
             data["op_status"] = loc.get("op_status")
         if "Self-ID Message" in item:
