@@ -38,6 +38,8 @@ _ACCEPTED_SIGNAL_SOURCES = frozenset({
     "sik_reasm",          # SiK CRC-clean MAVLink position update
     "sik_gps_repaired",   # SiK soft-CRC-repaired position update
     "sik_position_hint",  # SiK multi-frame consensus, approximate
+    "mlrs_confirm",       # mLRS RF/link confirmation (presence)
+    "mlrs_reasm",         # mLRS CRC-clean MAVLink position update
 })
 
 # Firehose-rate; drop silently to keep the unknown-source log useful.
@@ -52,6 +54,7 @@ _IGNORED_SIGNAL_SOURCES = frozenset({"energy"})
 _UNTHROTTLED_SIGNAL_SOURCES = frozenset({
     "sik_reasm",          # SiK CRC-clean MAVLink position update
     "sik_gps_repaired",   # SiK soft-CRC-repaired position update
+    "mlrs_reasm",         # mLRS CRC-clean MAVLink position update
 })
 
 
@@ -146,6 +149,11 @@ def _parse_fpv_alert(message: Any) -> Optional[Dict[str, Any]]:
             data["net_id"] = sig.get("net_id")
             data["baud_rate"] = sig.get("baud_rate")
             data["has_mavlink"] = sig.get("has_mavlink")
+            # mLRS identifies a link by its 16-bit FrameSyncWord rather
+            # than a Net ID. crc_repaired marks a soft-CRC-repaired frame
+            # so consumers can downgrade it if they choose.
+            data["link_id"] = sig.get("link_id")
+            data["crc_repaired"] = sig.get("crc_repaired")
 
     if not data.get("center_hz") and data.get("frequency_hz"):
         data["center_hz"] = data.get("frequency_hz")
@@ -156,6 +164,27 @@ def _parse_fpv_alert(message: Any) -> Optional[Dict[str, Any]]:
     return data
 
 
+def _rf_drone_id(alert: Dict[str, Any]) -> Optional[str]:
+    """Stable drone-dict key for an RF-intercepted link, or None.
+
+    SiK radios are addressed by Net ID, mLRS links by their 16-bit
+    FrameSyncWord. Both are logical addresses that survive frequency
+    hopping, so the tracked drone stays put while the link hops. The
+    mLRS form is hex to match the MLRS-LINK-XXXX callsign DragonSig puts
+    in Basic ID. FPV has no RF identity and returns None.
+    """
+    net_id = alert.get("net_id")
+    if net_id is not None:
+        return f"drone-900FHSS-NETID-{net_id}"
+    link_id = alert.get("link_id")
+    if link_id is not None:
+        try:
+            return f"drone-MLRS-LINK-{int(link_id):04X}"
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
 def _compute_signal_uid(alert: Dict[str, Any]) -> str:
     """Pick the stable CoT/MQTT UID for a parsed Signal Info alert.
 
@@ -163,11 +192,23 @@ def _compute_signal_uid(alert: Dict[str, Any]) -> str:
     marker per hop. Net ID is the radio's logical address, so one UID per
     Net ID keeps the marker stable while still separating distinct SiK
     drones. FPV has no Net ID; the channel frequency IS the identifier.
+
+    mLRS hops too, across a 25-channel set derived from its FrameSyncWord,
+    so it needs the same treatment: the sync word is the logical address
+    and the frequency is not. Without this a single mLRS link would spawn
+    a fresh marker on every hop.
     """
     signal_type = alert.get("signal_type") or "fpv"
     net_id = alert.get("net_id")
     if signal_type == "gfsk_fhss" and net_id is not None:
         return f"gfsk_fhss-netid-{net_id}"
+
+    link_id = alert.get("link_id")
+    if link_id is not None:
+        try:
+            return f"lora_css-link-{int(link_id):04X}"
+        except (TypeError, ValueError):
+            pass
 
     center_hz = alert.get("center_hz")
     try:
@@ -376,20 +417,22 @@ def start_signal_worker(
                     # When MAVLink GPS is present, use drone's position.
                     # When no GPS, use receiver position (we know it exists).
                     net_id = alert.get("net_id")
+                    link_id = alert.get("link_id")
                     has_mav = alert.get("has_mavlink") is True
-                    if drone_manager is not None and net_id is not None and not has_mav:
-                        # RF-only signal (e.g. sik_confirm without decoded
-                        # GPS) for a Net ID that a prior CRC-clean position
-                        # update already elevated. Refresh last_update_time
-                        # so the drone stays inside inactivity_timeout while
-                        # RF is present, but do not overwrite the last known
-                        # drone-GPS position with the receiver's position.
-                        drone_id = f"drone-900FHSS-NETID-{net_id}"
-                        drone_manager.touch(drone_id)
-                    if drone_manager is not None and net_id is not None and has_mav:
+                    rf_drone_id = _rf_drone_id(alert)
+                    if drone_manager is not None and rf_drone_id is not None and not has_mav:
+                        # RF-only signal (e.g. sik_confirm or mlrs_confirm
+                        # without a decoded GPS) for a link that a prior
+                        # CRC-clean position update already elevated.
+                        # Refresh last_update_time so the drone stays
+                        # inside inactivity_timeout while RF is present,
+                        # but do not overwrite the last known drone-GPS
+                        # position with the receiver's position.
+                        drone_manager.touch(rf_drone_id)
+                    if drone_manager is not None and rf_drone_id is not None and has_mav:
                         try:
                             from core.drone import Drone
-                            drone_id = f"drone-900FHSS-NETID-{net_id}"
+                            drone_id = rf_drone_id
 
                             # Position: drone GPS if MAVLink, else receiver
                             drone_lat = float(alert.get("sensor_lat") or 0)
@@ -401,9 +444,12 @@ def start_signal_worker(
                                 raise ValueError("No position")
 
                             baud = alert.get("baud_rate")
-                            desc_parts = [f"Net ID {net_id}"]
-                            if baud:
-                                desc_parts.append(f"{int(baud)//1000}k")
+                            if net_id is not None:
+                                desc_parts = [f"Net ID {net_id}"]
+                                if baud:
+                                    desc_parts.append(f"{int(baud)//1000}k")
+                            else:
+                                desc_parts = [f"Link {int(link_id):04X}"]
                             if has_mav:
                                 desc_parts.append("MAVLink")
                             description = alert.get("self_id") or " ".join(desc_parts)
