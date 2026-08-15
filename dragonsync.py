@@ -1068,7 +1068,11 @@ if __name__ == "__main__":
         "lattice_enabled": args.lattice_enabled or get_bool(config_values.get("lattice_enabled"), False),
         # Environment (Authorization) token
         "lattice_token": args.lattice_token if args.lattice_token is not None else (
-            os.getenv("LATTICE_TOKEN") or os.getenv("ENVIRONMENT_TOKEN") or get_str(config_values.get("lattice_token"))
+            os.getenv("LATTICE_BEARER_TOKEN")
+            or os.getenv("LATTICE_TOKEN")
+            or os.getenv("ENVIRONMENT_TOKEN")
+            or get_str(config_values.get("lattice_bearer_token"))
+            or get_str(config_values.get("lattice_token"))
         ),
         # Prefer full base URL if provided
         "lattice_base_url": args.lattice_base_url if args.lattice_base_url is not None else (

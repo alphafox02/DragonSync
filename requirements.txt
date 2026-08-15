@@ -7,3 +7,6 @@ psutil
 pycparser
 pyzmq
 requests
+
+# Optional: Lattice integration (sinks/lattice_sink.py)
+# anduril-lattice-sdk>=4.25.0

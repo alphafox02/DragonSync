@@ -22,6 +22,7 @@ import time
 from typing import Optional, Dict, Any
 import datetime as dt
 import os
+import inspect
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Anduril SDK imports
@@ -34,6 +35,7 @@ try:
         Health, ComponentHealth, ComponentMessage, VisualDetails, RangeRings, Quaternion, 
         Relationships, Relationship, RelationshipType, TrackedBy, Sensors, Sensor 
     )
+    from anduril.types.alternate_id import AlternateId
     # Optional enum (names differ across SDKs; used only for AIR)
     try:
         from anduril.entities.types.mil_view import Environment as MilEnvironment  # type: ignore
@@ -50,6 +52,7 @@ except Exception as e:
     _IMPORT_ERROR = e
     Lattice = None  # type: ignore
     Location = Position = MilView = Ontology = Provenance = Aliases = None  # type: ignore
+    AlternateId = None  # type: ignore
     Classification = ClassificationInformation = None  # type: ignore
     MilEnvironment = None  # type: ignore
     RequestOptions = None  # type: ignore
@@ -60,6 +63,22 @@ else:
     _SDK_VERSION = getattr(_anduril_mod, "__version__", "unknown")
 
 _log = logging.getLogger(__name__)
+
+
+def _lattice_token_arg(token: str):
+    """
+    The Anduril SDK changed token handling across versions. Older SDKs, such
+    as 4.8.x, expect token to be a callable provider; newer SDKs accept the
+    bearer token string directly.
+    """
+    try:
+        param = inspect.signature(Lattice).parameters.get("token")  # type: ignore[arg-type]
+        annotation = str(getattr(param, "annotation", ""))
+        if "Callable" in annotation:
+            return lambda: token
+    except Exception:
+        pass
+    return token
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Helpers
@@ -108,6 +127,18 @@ def _bearing_to_enu_quaternion(bearing_deg: float) -> Quaternion:
         z=sy
     )
 
+def _rid_serial_from_entity_id(entity_id: str, id_type: str) -> Optional[str]:
+    """
+    DragonSync stores RID aircraft entities as drone-<serial>.  Lattice wants
+    the aircraft serial itself as a structured alternate ID.
+    """
+    if id_type != "Serial Number (ANSI/CTA-2063-A)":
+        return None
+    serial = (entity_id or "").strip()
+    if serial.startswith("drone-"):
+        serial = serial[len("drone-"):]
+    return serial or None
+
 # ────────────────────────────────────────────────────────────────────────────────
 # LatticeSink (minimal publish)
 # ────────────────────────────────────────────────────────────────────────────────
@@ -141,19 +172,20 @@ class LatticeSink:
         self.source_name = source_name
 
         headers = {"anduril-sandbox-authorization": f"Bearer {self._sandbox_token}"} if self._sandbox_token else None
+        token_arg = _lattice_token_arg(token)
         self._req_opts = None
         try:
             if base_url:
-                self.client = Lattice(token=token, base_url=base_url, headers=headers)  # type: ignore
+                self.client = Lattice(token=token_arg, base_url=base_url, headers=headers)  # type: ignore
             else:
-                self.client = Lattice(token=token, headers=headers)  # type: ignore
+                self.client = Lattice(token=token_arg, headers=headers)  # type: ignore
             _log.info("LatticeSink ACTIVE. file=%s", os.path.abspath(__file__))
             _log.info("Anduril Lattice SDK version: %s", _SDK_VERSION)
         except TypeError:
             if base_url:
-                self.client = Lattice(token=token, base_url=base_url)  # type: ignore
+                self.client = Lattice(token=token_arg, base_url=base_url)  # type: ignore
             else:
-                self.client = Lattice(token=token)  # type: ignore
+                self.client = Lattice(token=token_arg)  # type: ignore
             if self._sandbox_token and RequestOptions is not None:
                 self._req_opts = RequestOptions(
                     additional_headers={"anduril-sandbox-authorization": f"Bearer {self._sandbox_token}"}
@@ -389,11 +421,11 @@ class LatticeSink:
         caa = str(g("caa", "") or "").strip()
         description = str(g("description", "") or "").strip()
         if description and caa:
-            alias = f"{description} [{id_type}: {caa}]"
+            alias = f"{entity_id} - {description} [{id_type}: {caa}]"
         elif description:
-            alias = f"{description} [{id_type}]"
+            alias = f"{entity_id} - {description}"
         else:
-            alias = f"{id_type}: {caa}"
+            alias = entity_id
         mac = str(g("mac", "") or "").strip()
         rssi = g("rssi")
         ua_type = str(g("ua_type_name", "Unknown")) or "Unknown"
@@ -467,7 +499,29 @@ class LatticeSink:
             attitude_enu=heading
         )
 
-        aliases = Aliases(name=alias)
+        alternate_ids = []
+        serial_number = _rid_serial_from_entity_id(entity_id, id_type)
+        if serial_number and AlternateId is not None:
+            alternate_ids.append(
+                AlternateId(
+                    id=serial_number,
+                    type="ALT_ID_TYPE_SERIAL_NUMBER",
+                )
+            )
+        if entity_id and AlternateId is not None:
+            alternate_ids.append(
+                AlternateId(
+                    id=entity_id,
+                    type="ALT_ID_TYPE_TRACK_ID_1",
+                )
+            )
+
+        # Only pass alternateIds when we actually have some: older SDKs
+        # without the field would reject the unexpected kwarg.
+        if alternate_ids:
+            aliases = Aliases(name=alias, alternateIds=alternate_ids)
+        else:
+            aliases = Aliases(name=alias)
         ontology = Ontology(
             template="TEMPLATE_TRACK", 
             platform_type="Small UAS"
@@ -481,6 +535,7 @@ class LatticeSink:
         provenance = Provenance(
             data_type="wardragon-detection",
             integration_name=self.source_name,
+            source_id=entity_id,
             source_update_time=_now_utc().isoformat()
         )
         expiry_time = _now_utc() + dt.timedelta(minutes=5)
