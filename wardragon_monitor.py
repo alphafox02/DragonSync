@@ -25,6 +25,7 @@ import signal
 import sys
 import uuid
 import os  # Import os module
+import re
 from typing import Optional
 from gps import gps, WATCH_ENABLE, WATCH_NEWSTYLE
 
@@ -141,6 +142,13 @@ def get_gps_data(debug=False):
 KIT_ID_CACHE_DIR = "/var/lib/wardragon"
 KIT_ID_CACHE_PATH = os.path.join(KIT_ID_CACHE_DIR, "kit-id")
 
+# Operator-set kit id suffix. Wins over dmidecode when present and valid.
+# The `wardragon-` prefix is applied downstream and is not overridable.
+KIT_ID_OVERRIDE_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "kit-id-override"
+)
+_KIT_ID_OVERRIDE_RE = re.compile(r"^[A-Za-z0-9._-]{1,32}$")
+
 
 def _persist_kit_id_cache(serial_number, debug=False):
     """Atomically persist the resolved kit serial to a fast-read cache file.
@@ -182,8 +190,37 @@ def _persist_kit_id_cache(serial_number, debug=False):
             print(f"[kit-id-cache] write failed (non-fatal): {e}")
 
 
+def _read_kit_id_override(debug=False):
+    """Return a validated operator override, or None to fall through to dmidecode."""
+    try:
+        with open(KIT_ID_OVERRIDE_PATH, "r") as f:
+            candidate = f.read().strip()
+    except FileNotFoundError:
+        return None
+    except Exception as e:
+        if debug:
+            print(f"[kit-id-override] unreadable {KIT_ID_OVERRIDE_PATH}: {e}")
+        return None
+    if not candidate:
+        return None
+    if not _KIT_ID_OVERRIDE_RE.match(candidate):
+        print(
+            f"[kit-id-override] rejected {candidate!r}: must match "
+            f"{_KIT_ID_OVERRIDE_RE.pattern}; falling back to dmidecode",
+            flush=True,
+        )
+        return None
+    if debug:
+        print(f"[kit-id-override] using {candidate!r} from {KIT_ID_OVERRIDE_PATH}")
+    return candidate
+
+
 def get_serial_number(debug=False):
     """Retrieve the system's serial number or MAC address as a unique identifier."""
+    override = _read_kit_id_override(debug=debug)
+    if override:
+        return override
+
     invalid_serials = [
         'N/A', 'Default string', 'To be filled by O.E.M.', 'None',
         'Not Specified', 'Unknown', ''
