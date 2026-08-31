@@ -1,5 +1,15 @@
 # DragonSync (Community Edition)
 
+## A note
+
+I built and maintain the open-source components in this repository. The WarDragon Pro and Elite commercial kits include additional in-house capabilities that are not detailed here and are not covered by the license of this repository.
+
+For production evaluation or procurement, please contact [cemaxecuter.com](https://cemaxecuter.com). The open-source work in this repository remains open, and contributions are welcome.
+
+— Aaron
+
+---
+
 A lightweight gateway that turns WarDragon’s drone detections into **Cursor on Target (CoT)** for TAK/ATAK, and (optionally) publishes per‑drone telemetry to **Lattice** as well as to **MQTT** for **Home Assistant**. This README focuses on the **WarDragon** kit where everything (drivers, sniffers, ZMQ monitor) is already set up—so you mostly just configure and run **DragonSync (Community Edition)**. A companion ATAK plugin (**WarDragon**) can use the read‑only API for richer UI, but it does **not** replace DragonSync’s CoT output.
 
 DragonSync can also ingest **ADS‑B / UAT (978 MHz)** aircraft data from a local `readsb` instance and convert that into CoT alongside your drone detections.
