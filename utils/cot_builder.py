@@ -525,6 +525,12 @@ def build_signal_cot(alert: Dict[str, Any], lat: float, lon: float, alt: float,
         remarks_parts.append(f"ntsc={alert.get('ntsc_conf')}")
     if alert.get('rssi') is not None:
         remarks_parts.append(f"rssi={alert.get('rssi')}dBm")
+    # Appended after rssi so existing string-matchers see an unchanged
+    # prefix. Omitted when the sensor had no measurement.
+    if alert.get('snr_db') is not None:
+        remarks_parts.append(f"snr_db={alert.get('snr_db')}")
+    if alert.get('noise_floor_db') is not None:
+        remarks_parts.append(f"noise_floor_db={alert.get('noise_floor_db')}")
     if seen_by:
         remarks_parts.append(f"SeenBy: {seen_by}")
     remarks = ' '.join(str(p) for p in remarks_parts if p)

@@ -140,3 +140,26 @@ def test_remarks_keep_source_for_provenance():
     r = _remarks({"uid": "u", "signal_type": "gfsk_fhss", "source": "sik_confirm",
                   "net_id": 25, "center_hz": 915e6})
     assert "source=sik_confirm" in r
+
+
+# ---- signal quality in remarks ------------------------------------------
+
+def test_remarks_carry_snr_when_measured():
+    r = _remarks({"uid": "u", "signal_type": "gfsk_fhss", "source": "sik_reasm",
+                  "net_id": 77, "center_hz": 915e6,
+                  "snr_db": 30.6, "noise_floor_db": -28.7})
+    assert "snr_db=30.6" in r and "noise_floor_db=-28.7" in r
+
+
+def test_remarks_omit_snr_when_not_measured():
+    r = _remarks({"uid": "u", "signal_type": "gfsk_fhss", "source": "sik_confirm",
+                  "net_id": 25, "center_hz": 915e6})
+    assert "snr_db" not in r and "noise_floor_db" not in r
+
+
+def test_remarks_prefix_is_unchanged_for_existing_matchers():
+    """snr is appended after rssi, so anything matching the old prefix
+    still matches."""
+    r = _remarks({"uid": "u", "signal_type": "gfsk_fhss", "source": "sik_confirm",
+                  "net_id": 25, "center_hz": 915e6, "snr_db": 12.0})
+    assert r.startswith("signal=gfsk_fhss net_id=25 source=sik_confirm")

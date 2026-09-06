@@ -632,6 +632,8 @@ class MqttSink:
             "pal": _f_or_none(sig.get("pal_conf")),
             "ntsc": _f_or_none(sig.get("ntsc_conf")),
             "rssi": _f_or_none(sig.get("rssi")),  # Signal strength in dBm
+            "snr_db": _f_or_none(sig.get("snr_db")),
+            "noise_floor_db": _f_or_none(sig.get("noise_floor_db")),
             "sensor_lat": _f_or_none(sig.get("sensor_lat")),
             "sensor_lon": _f_or_none(sig.get("sensor_lon")),
             "sensor_alt": _f_or_none(sig.get("sensor_alt")),

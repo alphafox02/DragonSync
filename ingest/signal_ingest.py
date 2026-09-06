@@ -157,6 +157,11 @@ def _parse_fpv_alert(message: Any) -> Optional[Dict[str, Any]]:
             # present; two contacts can share an identifier.
             data["chip_family"] = sig.get("chip_family")
             data["crc_repaired"] = sig.get("crc_repaired")
+            # Signal-to-noise and the floor it was measured against. The
+            # sensor omits them when it has no measurement, so absent and
+            # zero stay distinguishable - zero is a real SNR.
+            data["snr_db"] = sig.get("snr_db")
+            data["noise_floor_db"] = sig.get("noise_floor_db")
 
     if not data.get("center_hz") and data.get("frequency_hz"):
         data["center_hz"] = data.get("frequency_hz")
@@ -410,6 +415,8 @@ def start_signal_worker(
                         # callsign string.
                         "net_id": alert.get("net_id"),
                         "link_id": alert.get("link_id"),
+                        "snr_db": alert.get("snr_db"),
+                        "noise_floor_db": alert.get("noise_floor_db"),
                         "description": alert.get("description"),
                         "self_id": alert.get("self_id"),
                         "center_hz": alert.get("center_hz"),

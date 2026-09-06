@@ -36,8 +36,9 @@ class _StubSignalManager:
         self.signals.append(signal)
 
 
-def _sik_alert(net_id, source="sik_confirm", chip_family="type-a"):
-    return [{
+def _sik_alert(net_id, source="sik_confirm", chip_family="type-a",
+               snr_db=None, noise_floor_db=None):
+    a = [{
         "Basic ID": {"id": f"900FHSS-NETID-{net_id}", "description": "SiK"},
         "Location/Vector Message": {
             "latitude": 33.5257, "longitude": -82.2204,
@@ -55,6 +56,11 @@ def _sik_alert(net_id, source="sik_confirm", chip_family="type-a"):
             "has_mavlink": False,
         },
     }]
+    if snr_db is not None:
+        a[0]["Signal Info"]["snr_db"] = snr_db
+    if noise_floor_db is not None:
+        a[0]["Signal Info"]["noise_floor_db"] = noise_floor_db
+    return a
 
 
 def _run_worker_with(alerts, port=5599):
@@ -106,3 +112,26 @@ def test_worker_records_callsign_and_chip_family():
     assert signals[0]["callsign"] == "900FHSS-NETID-77"
     assert signals[0]["chip_family"] == "type-b"
     assert signals[0]["source"] == "sik_confirm"
+
+
+# ---- signal quality survives the worker ---------------------------------
+
+def test_snr_and_floor_reach_the_record():
+    signals = _run_worker_with(
+        [_sik_alert(25, snr_db=30.6, noise_floor_db=-28.7)], port=5602)
+    assert signals[0]["snr_db"] == 30.6
+    assert signals[0]["noise_floor_db"] == -28.7
+
+
+def test_absent_snr_stays_absent_rather_than_zero():
+    """The sensor omits these when it has no measurement. Zero is a real
+    SNR, so an absent one must not arrive as 0.0."""
+    signals = _run_worker_with([_sik_alert(25)], port=5603)
+    assert signals[0]["snr_db"] is None
+    assert signals[0]["noise_floor_db"] is None
+
+
+def test_zero_snr_is_preserved():
+    """A signal sitting at the noise floor is a real reading."""
+    signals = _run_worker_with([_sik_alert(25, snr_db=0.0)], port=5604)
+    assert signals[0]["snr_db"] == 0.0
