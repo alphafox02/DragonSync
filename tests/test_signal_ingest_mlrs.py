@@ -40,7 +40,7 @@ def _build_mlrs_alert_message(source, has_mavlink, link_id=0x7C85,
         {"Self-ID Message": {
             "protocol_version": "F3411.22",
             "text_type": "Text",
-            "text": f"MAVLink drone Link {link_id:04X} (sx126x_sf5_31hz) "
+            "text": f"MAVLink drone Link {link_id:04X} (profile-a) "
                     "on mLRS 500 kHz FHSS",
         }},
         {"Signal Info": {
@@ -51,8 +51,8 @@ def _build_mlrs_alert_message(source, has_mavlink, link_id=0x7C85,
             "bandwidth_hz": 500000.0,
             "link_id": link_id,
             "crc_repaired": False,
-            "profile": "sx126x_sf5_31hz",
-            "chip_family": "sx126x",
+            "profile": "profile-a",
+            "chip_family": "type-c",
             "rssi": 15.0,
         }},
     ]
