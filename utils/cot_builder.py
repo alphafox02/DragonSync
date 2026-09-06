@@ -499,6 +499,20 @@ def build_signal_cot(alert: Dict[str, Any], lat: float, lon: float, alt: float,
 
     # Build remarks with all signal metadata
     remarks_parts = [f"signal={signal_type}"]
+    # Identify the contact before describing it: source says how it was
+    # confirmed, which is useless on its own when every contact of a kind
+    # shares it. net_id/link_id are what make this link unique, and
+    # Optional sub-type from the sensor; can separate two contacts that
+    # share an identifier.
+    if alert.get('net_id') is not None:
+        remarks_parts.append(f"net_id={alert.get('net_id')}")
+    if alert.get('link_id') is not None:
+        try:
+            remarks_parts.append(f"link_id={int(alert.get('link_id')):04X}")
+        except (TypeError, ValueError):
+            pass
+    if alert.get('chip_family'):
+        remarks_parts.append(f"chip_family={alert.get('chip_family')}")
     if alert.get('source') is not None:
         remarks_parts.append(f"source={alert.get('source')}")
     if alert.get('center_hz') is not None:

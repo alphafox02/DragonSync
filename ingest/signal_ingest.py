@@ -153,6 +153,9 @@ def _parse_fpv_alert(message: Any) -> Optional[Dict[str, Any]]:
             # than a Net ID. crc_repaired marks a soft-CRC-repaired frame
             # so consumers can downgrade it if they choose.
             data["link_id"] = sig.get("link_id")
+            # Optional sub-type reported by the sensor. Passed through when
+            # present; two contacts can share an identifier.
+            data["chip_family"] = sig.get("chip_family")
             data["crc_repaired"] = sig.get("crc_repaired")
 
     if not data.get("center_hz") and data.get("frequency_hz"):
@@ -183,6 +186,38 @@ def _rf_drone_id(alert: Dict[str, Any]) -> Optional[str]:
         except (TypeError, ValueError):
             return None
     return None
+
+
+def _signal_callsign(alert: Dict[str, Any], signal_type: Optional[str]) -> str:
+    """Operator-facing label: what the contact IS, not how it was confirmed.
+
+    Mirrors the elevated drone key without the "drone-" prefix, which is
+    reserved for a link that has produced a position. A contact therefore
+    keeps a recognisable name as it goes from RF-only to tracked drone:
+
+        900FHSS-NETID-25  ->  drone-900FHSS-NETID-25
+        MLRS-LINK-1A2B    ->  drone-MLRS-LINK-1A2B
+
+    DragonSig already publishes that identifier in Basic ID, so this reuses
+    it rather than rebuilding the string, and the two cannot drift apart.
+    FPV has no RF identity; its channel is its name.
+
+    Keying the label on `source` instead - the previous behaviour - gave
+    every contact of a kind the same caption, so two contacts of one type
+    read alike despite being correctly separate markers.
+    `source` remains its own field for consumers that show provenance.
+    """
+    alert_id = alert.get("alert_id")
+    if alert_id:
+        return str(alert_id)
+
+    center_hz = alert.get("center_hz")
+    try:
+        return f"FPV-{int(round(float(center_hz) / 1e6))}MHz"
+    except (TypeError, ValueError):
+        pass
+
+    return signal_type.upper().replace("_", "-") if signal_type not in ("fpv", None) else "FPV"
 
 
 def _compute_signal_uid(alert: Dict[str, Any]) -> str:
@@ -359,8 +394,7 @@ def start_signal_worker(
                     )
 
                     seen_by = seen_by_provider() if callable(seen_by_provider) else None
-                    sig_label = signal_type.upper().replace("_", "-") if signal_type not in ("fpv", None) else "FPV"
-                    callsign = f"{sig_label} {source}".strip()
+                    callsign = _signal_callsign(alert, signal_type)
 
                     signal = {
                         "uid": uid,
@@ -368,6 +402,14 @@ def start_signal_worker(
                         "source": source,
                         "alert_id": alert_id,
                         "callsign": callsign,
+                        # Passed through when the sensor supplies it; it can
+                        # separate two contacts that share an identifier.
+                        "chip_family": alert.get("chip_family"),
+                        # The identifiers themselves, so CoT remarks and any
+                        # console can name the contact without re-parsing the
+                        # callsign string.
+                        "net_id": alert.get("net_id"),
+                        "link_id": alert.get("link_id"),
                         "description": alert.get("description"),
                         "self_id": alert.get("self_id"),
                         "center_hz": alert.get("center_hz"),

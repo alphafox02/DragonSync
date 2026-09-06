@@ -185,6 +185,32 @@ Published to **`wardragon/drone/<id>/pilot_attrs`** and **`wardragon/drone/<id>/
 
 ---
 
+## Signal naming
+
+A contact is named by its identifier, never by `source`. `source` says how a
+detection was confirmed (`sik_confirm`, `sik_reasm`, `mlrs_confirm`); it is a
+separate field and does not belong in a display name, because every contact of
+a kind would then read alike.
+
+The RF-only name is the elevated drone key without its `drone-` prefix, which
+is reserved for a link that has produced a position:
+
+| contact | `callsign` (RF-only) | drone key once it has GPS |
+|---------|----------------------|---------------------------|
+| FHSS link | `900FHSS-NETID-25` | `drone-900FHSS-NETID-25` |
+| mLRS | `MLRS-LINK-1A2B` | `drone-MLRS-LINK-1A2B` |
+| FPV | `FPV-5945MHz` | none — analog FPV has no RF identity |
+
+DragonSig publishes the SiK and mLRS forms in `Basic ID`, so DragonSync reuses
+that string rather than rebuilding it and the two cannot drift apart.
+
+`chip_family` is an optional sub-type supplied by the sensor, passed through
+when present. It can separate two contacts that share an identifier.
+
+Pinned by `tests/test_signal_ingest_callsign.py`.
+
+---
+
 ## Signal Payload
 
 FPV / RF signal detections published to **`wardragon/signals`**. Source: `_signal_to_state`.
@@ -194,7 +220,7 @@ FPV / RF signal detections published to **`wardragon/signals`**. Source: `_signa
 | `uid` | string | Stable detection UID |
 | `signal_type` | string | e.g. `fpv`, `analog-video`, `digital-fhss` |
 | `source` | string \| null | Source identifier (e.g. SDR name) |
-| `callsign` | string \| null | Display name |
+| `callsign` | string \| null | Display name — see **Signal naming** below |
 | `description` | string \| null | Free-text description |
 | `center_hz` | float \| null | Centre frequency (Hz) |
 | `bandwidth_hz` | float \| null | Bandwidth (Hz) |
