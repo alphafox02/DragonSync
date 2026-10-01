@@ -958,11 +958,11 @@ if __name__ == "__main__":
     parser.add_argument("--mqtt-topic", type=str, help="MQTT topic for drone messages")
     parser.add_argument("--mqtt-username", type=str, help="MQTT username")
     parser.add_argument("--mqtt-password", type=str, help="MQTT password")
-    parser.add_argument("--mqtt-tls", action="store_true", help="Enable MQTT TLS")
+    parser.add_argument("--mqtt-tls", action="store_true", default=None, help="Enable MQTT TLS")
     parser.add_argument("--mqtt-ca-file", type=str, help="Path to CA file for MQTT TLS")
     parser.add_argument("--mqtt-certfile", type=str, help="Path to client certificate for MQTT TLS (optional)")
     parser.add_argument("--mqtt-keyfile", type=str, help="Path to client key for MQTT TLS (optional)")
-    parser.add_argument("--mqtt-tls-insecure", action="store_true", help="(UNSAFE) Skip MQTT TLS hostname/chain verification")
+    parser.add_argument("--mqtt-tls-insecure", action="store_true", default=None, help="(UNSAFE) Skip MQTT TLS hostname/chain verification")
     parser.add_argument("--mqtt-retain", action="store_true", default=None,
                         help="Retain published state topics (default: true if unset)")
     parser.add_argument("--mqtt-per-drone-enabled", action="store_true", default=None,
