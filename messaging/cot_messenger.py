@@ -335,51 +335,36 @@ class CotMessenger:
         Sends a CoT message to TAK servers and multicast addresses with retry logic.
 
         :param cot_xml: The CoT XML message in bytes.
-        :param retry_count: Number of retry attempts for sending.
-        :param retry_delay: Delay between retries in seconds.
+        :param retry_count: Number of retry attempts for multicast sending.
+        :param retry_delay: Delay between multicast retries in seconds.
         """
         logger.debug("send_cot method called.")
         logger.debug(
             f"Multicast Enabled: {self.enable_multicast}, Multicast Sockets: {len(self.multicast_sockets)} initialized"
         )
 
-        # Sending to TAK server via TCP/TLS
+        # Sending to TAK server via TCP/TLS or UDP. Single attempt on purpose:
+        # both clients swallow their own errors and return False, and a failed
+        # TCP send has already closed the socket, so retrying here would only
+        # sleep the calling thread. The TCP reconnect runs in its own thread.
         if self.tak_client:
-            for attempt in range(1, retry_count + 1):
-                try:
-                    self.tak_client.send(cot_xml)
-                    logger.info(
-                        f"Sent CoT message to TAK server via TCP/TLS at {self.tak_client.host}:{self.tak_client.port}"
-                    )
-                    break
-                except Exception as e:
-                    logger.error(
-                        f"Attempt {attempt}: Failed to send CoT message via TCP/TLS: {e}"
-                    )
-                    if attempt < retry_count:
-                        time.sleep(retry_delay)
-                    else:
-                        logger.critical(
-                            "Exceeded maximum retries for sending CoT message via TCP/TLS."
-                        )
+            if self.tak_client.send(cot_xml):
+                logger.info(
+                    f"Sent CoT message to TAK server via TCP/TLS at {self.tak_client.host}:{self.tak_client.port}"
+                )
+            else:
+                logger.warning(
+                    f"CoT message not sent to TAK server via TCP/TLS at {self.tak_client.host}:{self.tak_client.port}"
+                )
         elif self.tak_udp_client:
-            for attempt in range(1, retry_count + 1):
-                try:
-                    self.tak_udp_client.send(cot_xml)
-                    logger.info(
-                        f"Sent CoT message to TAK server via UDP at {self.tak_udp_client.host}:{self.tak_udp_client.port}"
-                    )
-                    break
-                except Exception as e:
-                    logger.error(
-                        f"Attempt {attempt}: Failed to send CoT message via UDP: {e}"
-                    )
-                    if attempt < retry_count:
-                        time.sleep(retry_delay)
-                    else:
-                        logger.critical(
-                            "Exceeded maximum retries for sending CoT message via UDP."
-                        )
+            if self.tak_udp_client.send(cot_xml):
+                logger.info(
+                    f"Sent CoT message to TAK server via UDP at {self.tak_udp_client.host}:{self.tak_udp_client.port}"
+                )
+            else:
+                logger.warning(
+                    f"CoT message not sent to TAK server via UDP at {self.tak_udp_client.host}:{self.tak_udp_client.port}"
+                )
         else:
             logger.debug(
                 "No TAK client configured. Skipping sending CoT message to TAK server."

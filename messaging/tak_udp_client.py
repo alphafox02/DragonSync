@@ -40,13 +40,19 @@ class TAKUDPClient:
         """Returns the TAK server port."""
         return self.tak_port
 
-    def send(self, cot_xml: bytes):
-        """Sends a CoT XML message to the TAK server via UDP."""
+    def send(self, cot_xml: bytes) -> bool:
+        """Sends a CoT XML message to the TAK server via UDP.
+
+        Returns True if the datagram was handed to the OS, False on error.
+        It never raises, so callers must check the result.
+        """
         try:
             self.sock.sendto(cot_xml, (self.tak_host, self.tak_port))
             logger.debug(f"Sent CoT message via UDP to {self.tak_host}:{self.tak_port}")
+            return True
         except Exception as e:
             logger.error(f"Error sending CoT message via UDP: {e}")
+            return False
 
     def close(self):
         """Closes the UDP socket."""

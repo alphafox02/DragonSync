@@ -52,15 +52,26 @@ class TAKClient:
     def connect(self):
         """Establishes a connection to the TAK server with exponential backoff capped at max_backoff."""
         while self.max_retries == -1 or self.retry_count < self.max_retries:
+            raw_sock = None
             try:
-                self.sock = socket.create_connection((self.tak_host, self.tak_port), timeout=10)
+                raw_sock = socket.create_connection((self.tak_host, self.tak_port), timeout=10)
+                sock = raw_sock
                 if self.tak_tls_context:
-                    self.sock = self.tak_tls_context.wrap_socket(self.sock, server_hostname=self.tak_host)
+                    sock = self.tak_tls_context.wrap_socket(raw_sock, server_hostname=self.tak_host)
+                # Only publish the socket once it is fully set up. Assigning the
+                # raw socket to self.sock before the TLS handshake meant a failed
+                # handshake left a plaintext socket that send() would happily use.
+                self.sock = sock
                 logger.debug("Connected to TAK server via TCP/TLS")
                 self.retry_count = 0  # Reset retry count after a successful connection
                 return
             except Exception as e:
-                wait_time = min(self.backoff_factor ** self.retry_count, self.max_backoff)
+                if raw_sock is not None:
+                    try:
+                        raw_sock.close()
+                    except Exception:
+                        pass
+                wait_time = self._backoff_delay()
                 logger.error(f"Error connecting to TAK server: {e}. Retrying in {wait_time} seconds...")
                 time.sleep(wait_time)
                 self.retry_count += 1
@@ -68,20 +79,37 @@ class TAKClient:
         logger.critical("Max retries exceeded. Failed to connect to TAK server via TCP/TLS.")
         self.sock = None
 
+    def _backoff_delay(self) -> float:
+        """Seconds to wait before the next connect attempt.
+
+        retry_count grows without bound when max_retries is -1, and a float
+        power overflows (OverflowError) past ~1024 attempts instead of
+        returning inf, so clamp to max_backoff explicitly.
+        """
+        try:
+            return min(self.backoff_factor ** self.retry_count, self.max_backoff)
+        except OverflowError:
+            return self.max_backoff
+
     def run_connect_loop(self):
         """
         Continuously attempts to connect to the TAK server in the background.
         This method should be run in a separate daemon thread.
         """
         while True:
-            if not self.sock:
-                with self.connecting_lock:
-                    # Double-check inside the lock to avoid race conditions.
-                    if not self.sock:
-                        self.connect()
+            try:
+                if not self.sock:
+                    with self.connecting_lock:
+                        # Double-check inside the lock to avoid race conditions.
+                        if not self.sock:
+                            self.connect()
+            except Exception as e:
+                # An exception escaping here would silently end the thread and
+                # leave TAK output dead until restart. Log it and keep going.
+                logger.exception(f"Unexpected error in TAK reconnect loop: {e}")
             time.sleep(1)  # Check every second if connection is available
 
-    def send(self, cot_xml: bytes):
+    def send(self, cot_xml: bytes) -> bool:
         """Sends a CoT XML message to the TAK server via TCP/TLS.
 
         Non-blocking by design: if the socket is unavailable, the message is
@@ -91,22 +119,27 @@ class TAKClient:
         entire calling thread (system status, drone publishing, etc.) for
         as long as the TAK server was unreachable. That cascaded into MQTT,
         Lattice, and HA discovery never being called from the same thread.
+
+        Returns True if the message was written to the socket, False if it
+        was dropped. It never raises, so callers must check the result.
         """
         # Fast-fail if no socket. The run_connect_loop daemon thread is
         # already trying to reconnect in the background once per second.
         if not self.sock:
             logger.debug("TAK socket unavailable; dropping CoT message (background reconnect in progress)")
-            return
+            return False
 
         try:
             self.sock.sendall(cot_xml)
             logger.debug(f"Sent CoT message via TCP/TLS: {cot_xml}")
+            return True
         except Exception as e:
             logger.error(f"Error sending CoT message via TCP/TLS: {e}")
             # close() sets self.sock = None; the daemon thread will reconnect
             # on its next 1s cycle. Do NOT call self.connect() synchronously
             # here — it would block the caller indefinitely on a permanent outage.
             self.close()
+            return False
 
     def close(self):
         """Closes the connection to the TAK server."""
