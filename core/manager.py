@@ -178,6 +178,7 @@ class DroneManager:
                         mac=drone_data.mac,
                         rssi=drone_data.rssi,
                         freq=getattr(drone_data, "freq", None),
+                        observed_at=getattr(drone_data, "observed_at", None),
                     )
                     if drone_data.mac and self.mac_to_id.get(drone_data.mac) != drone_id:
                         self.mac_to_id[drone_data.mac] = drone_id
@@ -206,6 +207,7 @@ class DroneManager:
                     mac=drone_data.mac,
                     rssi=drone_data.rssi,
                     freq=getattr(drone_data, "freq", None),
+                    observed_at=getattr(drone_data, "observed_at", None),
                 )
 
                 # Update RID verification status after promotion check

@@ -135,3 +135,52 @@ def test_zero_snr_is_preserved():
     """A signal sitting at the noise floor is a real reading."""
     signals = _run_worker_with([_sik_alert(25, snr_db=0.0)], port=5604)
     assert signals[0]["snr_db"] == 0.0
+
+
+def test_elevated_rf_drone_carries_an_advancing_observation_time():
+    """A SiK MAVLink position elevates the link to a drone. Each new fix
+    must carry its own arrival time, or sinks that forward only new
+    observations would treat every later fix as a repeat of the first."""
+    from core import DroneManager
+
+    def reasm(lat):
+        a = _sik_alert(31, source="sik_reasm")
+        a[0]["Signal Info"]["has_mavlink"] = True
+        a[0]["Signal Info"]["sensor_lat"] = lat
+        a[0]["Signal Info"]["sensor_lon"] = 2.5
+        a[0]["Location/Vector Message"]["latitude"] = lat
+        a[0]["Location/Vector Message"]["longitude"] = 2.5
+        return a
+
+    ctx = zmq.Context()
+    pub = ctx.socket(zmq.PUB)
+    pub.bind("tcp://127.0.0.1:5597")
+    dm = DroneManager(max_drones=5, rate_limit=0.0, inactivity_timeout=60.0,
+                      cot_messenger=None, extra_sinks=[])
+    thread, stop = signal_ingest.start_signal_worker(
+        zmq_host="127.0.0.1", zmq_port=5597,
+        cot_messenger=_StubMessenger(), signal_manager=_StubSignalManager(),
+        drone_manager=dm, min_send_interval=0.0,
+    )
+    seen = []
+    try:
+        time.sleep(0.4)
+        for lat in (1.50, 1.51):
+            pub.send_string(json.dumps(reasm(lat)))
+            deadline = time.time() + 3.0
+            while time.time() < deadline:
+                drones = list(dm.drone_dict.values())
+                if drones and drones[0].lat == lat:
+                    seen.append(drones[0].observed_at)
+                    break
+                time.sleep(0.05)
+            time.sleep(0.2)
+    finally:
+        stop.set()
+        thread.join(timeout=3.0)
+        pub.close(0)
+        ctx.term()
+
+    assert len(seen) == 2, "drone was not elevated / updated"
+    assert seen[0] is not None and seen[1] is not None
+    assert seen[1] > seen[0]

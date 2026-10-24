@@ -522,6 +522,10 @@ def start_signal_worker(
                                 transport=signal_type or "ISM-FHSS",
                                 freq=float(alert.get("center_hz") or 0) / 1e6,
                                 direction=float(alert.get("direction") or 0),
+                                # When this position arrived. Without it, sinks
+                                # cannot tell a new MAVLink fix from the manager's
+                                # timer re-dispatch of the last one.
+                                observed_at=now,
                             )
                             drone_manager.update_or_add_drone(drone_id, drone)
                             logger.info("Tracked %s at %.5f, %.5f%s",

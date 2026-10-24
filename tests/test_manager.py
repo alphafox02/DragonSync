@@ -632,3 +632,16 @@ def test_manager_mac_index_fifo_eviction(manager):
 
     # New drone's MAC should be present
     assert "AA:BB:CC:DD:EE:0A" in manager.mac_to_id
+
+
+def test_update_or_add_drone_carries_observed_at_on_update(manager, sample_drone):
+    """RF-elevated drones are refreshed through update_or_add_drone; their
+    observation time must advance or sinks cannot tell a new fix from a
+    timer re-dispatch."""
+    sample_drone.observed_at = 1_700_000_000.0
+    manager.update_or_add_drone(sample_drone.id, sample_drone)
+    newer = Drone(id=sample_drone.id, lat=1.1, lon=2.1, speed=0, vspeed=0, alt=0,
+                  height=0, pilot_lat=0, pilot_lon=0, description="", mac="", rssi=0,
+                  observed_at=1_700_000_005.0)
+    manager.update_or_add_drone(sample_drone.id, newer)
+    assert manager.drone_dict[sample_drone.id].observed_at == 1_700_000_005.0
