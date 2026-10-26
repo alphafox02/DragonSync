@@ -40,6 +40,7 @@ _ACCEPTED_SIGNAL_SOURCES = frozenset({
     "sik_position_hint",  # SiK multi-frame consensus, approximate
     "mlrs_confirm",       # mLRS RF/link confirmation (presence)
     "mlrs_reasm",         # mLRS CRC-clean MAVLink position update
+    "elrs_confirm",       # ELRS RF/link confirmation (presence)
 })
 
 # Firehose-rate; drop silently to keep the unknown-source log useful.

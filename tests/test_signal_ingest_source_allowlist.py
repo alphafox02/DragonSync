@@ -61,6 +61,9 @@ def test_known_sources_in_accepted():
         "sik_reasm",
         "sik_gps_repaired",
         "sik_position_hint",
+        "mlrs_confirm",
+        "mlrs_reasm",
+        "elrs_confirm",
     ):
         assert src in signal_ingest._ACCEPTED_SIGNAL_SOURCES, src
 
