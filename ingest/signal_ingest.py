@@ -28,34 +28,29 @@ import zmq
 
 logger = logging.getLogger(__name__)
 
-# Accepted Signal Info.source values. Strict equality (substring match
-# would admit unrecognized labels). Drone-dict elevation is gated
-# downstream on has_mavlink == True.
+# Accepted Signal Info.source values (strict equality). Producers emit
+# these; unrecognized labels are ignored downstream.
 _ACCEPTED_SIGNAL_SOURCES = frozenset({
-    "confirm",            # FPV PAL/NTSC comb confirmation
-    "sik_confirm",        # SiK RF/hop-pattern confirmation
-    "sik_alive_no_gps",   # SiK CRC-clean MAVLink, no GPS lock
-    "sik_reasm",          # SiK CRC-clean MAVLink position update
-    "sik_gps_repaired",   # SiK soft-CRC-repaired position update
-    "sik_position_hint",  # SiK multi-frame consensus, approximate
-    "mlrs_confirm",       # mLRS RF/link confirmation (presence)
-    "mlrs_reasm",         # mLRS CRC-clean MAVLink position update
-    "elrs_confirm",       # ELRS RF/link confirmation (presence)
+    "confirm",
+    "sik_confirm",
+    "sik_alive_no_gps",
+    "sik_reasm",
+    "sik_gps_repaired",
+    "sik_position_hint",
+    "mlrs_confirm",
+    "mlrs_reasm",
+    "elrs_confirm",
 })
 
 # Firehose-rate; drop silently to keep the unknown-source log useful.
 _IGNORED_SIGNAL_SOURCES = frozenset({"energy"})
 
-# Sources that carry drone position updates. These bypass the per-UID
-# min_send_interval throttle because SiK confirm and reasm share a Net-ID
-# UID by design (keeps the ATAK marker stable per drone), and confirms
-# arrive more frequently than reasms — without this exemption, every
-# reasm would land inside a recent confirm's throttle window and never
-# reach drone-dict elevation.
+# Sources that carry position updates and bypass the per-UID send throttle
+# (they can share a UID with a more frequent presence source).
 _UNTHROTTLED_SIGNAL_SOURCES = frozenset({
-    "sik_reasm",          # SiK CRC-clean MAVLink position update
-    "sik_gps_repaired",   # SiK soft-CRC-repaired position update
-    "mlrs_reasm",         # mLRS CRC-clean MAVLink position update
+    "sik_reasm",
+    "sik_gps_repaired",
+    "mlrs_reasm",
 })
 
 
@@ -150,9 +145,7 @@ def _parse_fpv_alert(message: Any) -> Optional[Dict[str, Any]]:
             data["net_id"] = sig.get("net_id")
             data["baud_rate"] = sig.get("baud_rate")
             data["has_mavlink"] = sig.get("has_mavlink")
-            # mLRS identifies a link by its 16-bit FrameSyncWord rather
-            # than a Net ID. crc_repaired marks a soft-CRC-repaired frame
-            # so consumers can downgrade it if they choose.
+            # Logical link address, when the producer supplies one.
             data["link_id"] = sig.get("link_id")
             # Optional sub-type reported by the sensor. Passed through when
             # present; two contacts can share an identifier.
@@ -176,11 +169,8 @@ def _parse_fpv_alert(message: Any) -> Optional[Dict[str, Any]]:
 def _rf_drone_id(alert: Dict[str, Any]) -> Optional[str]:
     """Stable drone-dict key for an RF-intercepted link, or None.
 
-    SiK radios are addressed by Net ID, mLRS links by their 16-bit
-    FrameSyncWord. Both are logical addresses that survive frequency
-    hopping, so the tracked drone stays put while the link hops. The
-    mLRS form is hex to match the MLRS-LINK-XXXX callsign DragonSig puts
-    in Basic ID. FPV has no RF identity and returns None.
+    Uses the link's logical address so the track survives frequency hopping.
+    Returns None when the link carries no such address.
     """
     net_id = alert.get("net_id")
     if net_id is not None:
@@ -195,23 +185,11 @@ def _rf_drone_id(alert: Dict[str, Any]) -> Optional[str]:
 
 
 def _signal_callsign(alert: Dict[str, Any], signal_type: Optional[str]) -> str:
-    """Operator-facing label: what the contact IS, not how it was confirmed.
+    """Operator-facing label for a contact.
 
-    Mirrors the elevated drone key without the "drone-" prefix, which is
-    reserved for a link that has produced a position. A contact therefore
-    keeps a recognisable name as it goes from RF-only to tracked drone:
-
-        900FHSS-NETID-25  ->  drone-900FHSS-NETID-25
-        MLRS-LINK-1A2B    ->  drone-MLRS-LINK-1A2B
-
-    DragonSig already publishes that identifier in Basic ID, so this reuses
-    it rather than rebuilding the string, and the two cannot drift apart.
-    FPV has no RF identity; its channel is its name.
-
-    Keying the label on `source` instead - the previous behaviour - gave
-    every contact of a kind the same caption, so two contacts of one type
-    read alike despite being correctly separate markers.
-    `source` remains its own field for consumers that show provenance.
+    Reuses the published identifier when present so the name stays stable as a
+    contact goes from presence-only to tracked; otherwise falls back to a
+    channel- or type-based label.
     """
     alert_id = alert.get("alert_id")
     if alert_id:
@@ -461,19 +439,16 @@ def start_signal_worker(
                     except Exception as e:
                         logger.debug("FPV signal CoT send failed: %s", e)
 
-                    # If this is an RF-intercepted signal with a Net ID,
-                    # promote to a tracked drone. Net ID is the stable
-                    # identifier (like a serial number for SiK radios).
-                    # When MAVLink GPS is present, use drone's position.
-                    # When no GPS, use receiver position (we know it exists).
+                    # If this signal carries a stable link identifier, promote
+                    # it to a tracked drone. Use the drone's position when it
+                    # reports GPS, otherwise the receiver's position.
                     net_id = alert.get("net_id")
                     link_id = alert.get("link_id")
                     has_mav = alert.get("has_mavlink") is True
                     rf_drone_id = _rf_drone_id(alert)
                     if drone_manager is not None and rf_drone_id is not None and not has_mav:
-                        # RF-only signal (e.g. sik_confirm or mlrs_confirm
-                        # without a decoded GPS) for a link that a prior
-                        # CRC-clean position update already elevated.
+                        # Presence-only signal (no decoded GPS) for a link that
+                        # a prior position update already elevated.
                         # Refresh last_update_time so the drone stays
                         # inside inactivity_timeout while RF is present,
                         # but do not overwrite the last known drone-GPS
