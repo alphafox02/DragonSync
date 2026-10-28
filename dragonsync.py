@@ -625,9 +625,17 @@ def zmq_to_cot(
     signal_stop = None
     if config.get("fpv_enabled"):
         try:
+            # Fan in a secondary local feed when configured (port 0 disables).
+            extra_endpoints = []
+            _port2 = int(config.get("fpv_zmq_port_2", 0) or 0)
+            if _port2 > 0:
+                extra_endpoints.append(
+                    (config.get("fpv_zmq_host_2", "127.0.0.1"), _port2)
+                )
             signal_thread, signal_stop = start_signal_worker(
                 zmq_host=config.get("fpv_zmq_host", "127.0.0.1"),
                 zmq_port=int(config.get("fpv_zmq_port", 4226)),
+                extra_endpoints=extra_endpoints,
                 cot_messenger=cot_messenger,
                 signal_manager=signal_manager,
                 mqtt_sink=mqtt_sink,
@@ -1106,6 +1114,10 @@ if __name__ == "__main__":
         "fpv_enabled": get_bool(config_values.get("fpv_enabled"), False),
         "fpv_zmq_host": get_str(config_values.get("fpv_zmq_host", "127.0.0.1")),
         "fpv_zmq_port": get_int(config_values.get("fpv_zmq_port", 4226)),
+        # Optional secondary signal publisher, fanned in on the same subscriber.
+        # Defaults to a local sensor feed; set the port to 0 to disable it.
+        "fpv_zmq_host_2": get_str(config_values.get("fpv_zmq_host_2", "127.0.0.1")),
+        "fpv_zmq_port_2": get_int(config_values.get("fpv_zmq_port_2", 4229)),
         "fpv_stale": get_float(config_values.get("fpv_stale", 60.0)),
         "fpv_radius_m": get_float(config_values.get("fpv_radius_m", 15.0)),
         "fpv_rate_limit": get_float(config_values.get("fpv_rate_limit", 2.0)),

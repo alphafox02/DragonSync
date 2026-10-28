@@ -22,7 +22,7 @@ import math
 import threading
 import time
 import xml.etree.ElementTree as ET
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import zmq
 
@@ -40,6 +40,7 @@ _ACCEPTED_SIGNAL_SOURCES = frozenset({
     "mlrs_confirm",
     "mlrs_reasm",
     "elrs_confirm",
+    "w_confirm",
 })
 
 # Firehose-rate; drop silently to keep the unknown-source log useful.
@@ -268,6 +269,9 @@ def start_signal_worker(
     *,
     zmq_host: str,
     zmq_port: int,
+    # Optional additional publishers to fan in on the same SUB socket. A single
+    # subscriber can connect to several sources; each tuple is (host, port).
+    extra_endpoints: Optional[List[Tuple[str, int]]] = None,
     cot_messenger: Any,
     signal_manager: Any,
     mqtt_sink: Optional[Any] = None,
@@ -316,8 +320,11 @@ def start_signal_worker(
         context = zmq.Context()
         socket = context.socket(zmq.SUB)
         socket.connect(f"tcp://{zmq_host}:{zmq_port}")
-        socket.setsockopt_string(zmq.SUBSCRIBE, "")
         logger.info("FPV signal ingest connected to tcp://%s:%s", zmq_host, zmq_port)
+        for _h, _p in (extra_endpoints or []):
+            socket.connect(f"tcp://{_h}:{_p}")
+            logger.info("FPV signal ingest connected to tcp://%s:%s", _h, _p)
+        socket.setsockopt_string(zmq.SUBSCRIBE, "")
 
         poller = zmq.Poller()
         poller.register(socket, zmq.POLLIN)
