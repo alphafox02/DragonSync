@@ -178,6 +178,8 @@ def _rf_drone_id(alert: Dict[str, Any]) -> Optional[str]:
     link_id = alert.get("link_id")
     if link_id is not None:
         try:
+            if (alert.get("signal_type") or "") == "fpv":
+                return f"drone-FPV-LINK-{int(link_id):04X}"
             return f"drone-MLRS-LINK-{int(link_id):04X}"
         except (TypeError, ValueError):
             return None
@@ -194,6 +196,13 @@ def _signal_callsign(alert: Dict[str, Any], signal_type: Optional[str]) -> str:
     alert_id = alert.get("alert_id")
     if alert_id:
         return str(alert_id)
+
+    link_id = alert.get("link_id")
+    if signal_type == "fpv" and link_id is not None:
+        try:
+            return f"FPV-LINK-{int(link_id):04X}"
+        except (TypeError, ValueError):
+            pass
 
     center_hz = alert.get("center_hz")
     try:
@@ -225,6 +234,8 @@ def _compute_signal_uid(alert: Dict[str, Any]) -> str:
     link_id = alert.get("link_id")
     if link_id is not None:
         try:
+            if signal_type == "fpv":
+                return f"fpv-link-{int(link_id):04X}"
             return f"lora_css-link-{int(link_id):04X}"
         except (TypeError, ValueError):
             pass
