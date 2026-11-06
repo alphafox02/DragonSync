@@ -148,9 +148,10 @@ class APIServer(BaseHTTPRequestHandler):
             self._write_json({"error": "status unavailable"}, status=500)
             return
         kit_id = None
-        if self.kit_id_provider:
+        provider = self.__class__.kit_id_provider
+        if provider:
             try:
-                kit_id = self.kit_id_provider()
+                kit_id = provider()
             except Exception:
                 kit_id = None
         if kit_id:
