@@ -18,6 +18,7 @@ limitations under the License.
 from typing import Optional, Dict, Any
 import configparser
 import logging
+import re
 import sys
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,32 @@ def load_config(config_path: str) -> Dict[str, Any]:
     except Exception as e:
         logger.critical(f"Failed to load configuration file {config_path}: {e}")
         sys.exit(1)
+
+# Display name for the kit's own CoT marker. Plain characters only: the value
+# lives in config.ini, where configparser treats % as interpolation, and it is
+# shown in TAK clients. It never changes the kit id (CoT uid, SeenBy, MQTT
+# topics, Lattice ids), which stays wardragon-<serial>.
+KIT_CALLSIGN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._-]{0,31}$")
+
+
+def parse_kit_callsign(value: Optional[Any]) -> Optional[str]:
+    """Return the configured callsign, or None to use the kit id.
+
+    An invalid value is logged and ignored rather than stopping DragonSync,
+    so a typo in the field cannot take a kit's outputs down.
+    """
+    callsign = get_str(value)
+    if not callsign:
+        return None
+    if not KIT_CALLSIGN_RE.match(callsign):
+        logger.warning(
+            "Ignoring kit_callsign %r: use 1-32 letters, digits, spaces, '.', '_' "
+            "or '-', starting with a letter or digit. Using the kit id instead.",
+            callsign,
+        )
+        return None
+    return callsign
+
 
 def get_str(value: Optional[Any], default: str = "") -> str:
     """

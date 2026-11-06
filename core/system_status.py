@@ -47,8 +47,11 @@ class SystemStatus:
         gps_fix: bool = False,
         time_source: str = "",
         gpsd_time_utc: str = "",
+        callsign: Optional[str] = None,
     ):
         self.id = f"wardragon-{serial_number}"
+        # Display name only; the kit is identified by self.id everywhere.
+        self.callsign = callsign or self.id
         self.lat = lat
         self.lon = lon
         self.alt = alt
@@ -72,6 +75,7 @@ class SystemStatus:
     def to_dict(self):
         return {
             "uid": self.id,
+            "callsign": self.callsign,
             "lat": self.lat,
             "lon": self.lon,
             "alt": self.alt,

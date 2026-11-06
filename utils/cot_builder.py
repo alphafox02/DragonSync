@@ -599,7 +599,8 @@ def build_system_status_cot(status, stale_seconds: float = 600.0) -> bytes:
     )
 
     detail = etree.SubElement(event, 'detail')
-    etree.SubElement(detail, 'contact', endpoint='', phone='', callsign=status.id)
+    callsign = getattr(status, 'callsign', None) or status.id
+    etree.SubElement(detail, 'contact', endpoint='', phone='', callsign=callsign)
     etree.SubElement(detail, 'precisionlocation', geopointsrc='gps', altsrc='gps')
 
     # Rich system health remarks with SDR temps

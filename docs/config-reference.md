@@ -40,6 +40,9 @@ tak_multicast_port = 6969
 tak_multicast_interface = 0.0.0.0
 multicast_ttl = 1
 
+# Name on this kit's own TAK marker (blank = kit id)
+kit_callsign =
+
 # Runtime behavior
 rate_limit = 3.0         # min seconds between sends per drone
 inactivity_timeout = 60.0
@@ -163,6 +166,14 @@ api_port = 8088
 | `tak_multicast_port` | `6969` | Multicast port |
 | `tak_multicast_interface` | `0.0.0.0` | Network interface to bind |
 | `multicast_ttl` | `1` | Multicast TTL (hops) |
+
+### Kit Callsign
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `kit_callsign` | *(blank)* | Name shown on the kit's own marker in TAK. Blank uses the kit id (`wardragon-<serial>`). 1-32 letters, digits, spaces, `.`, `_` or `-`; an invalid value is logged and ignored. |
+
+The callsign is a display name only. The kit id stays the identity everywhere: the CoT uid, `SeenBy` in detection remarks, MQTT topics and Lattice entity ids. Anything that tracks a kit keeps working when the callsign changes. `/status` reports both `kit_id` and `callsign`.
 
 ### Runtime Behavior
 

@@ -73,7 +73,7 @@ from messaging import TAKClient, TAKUDPClient, CotMessenger
 from core import Drone, SystemStatus, DroneManager, parse_drone_info
 from api import serve_api
 from update_check import update_check
-from utils import load_config, validate_config, get_str, get_int, get_float, get_bool
+from utils import load_config, validate_config, get_str, get_int, get_float, get_bool, parse_kit_callsign
 from ingest import ADSBTracker, adsb_worker_loop, start_kismet_worker, start_signal_worker
 from monitors import SignalManager
 import logging
@@ -871,7 +871,8 @@ def zmq_to_cot(
                         memory_total=memory_total, memory_available=memory_available,
                         disk_total=disk_total, disk_used=disk_used,
                         temperature=temperature, uptime=uptime,
-                        pluto_temp=pluto_temp, zynq_temp=zynq_temp
+                        pluto_temp=pluto_temp, zynq_temp=zynq_temp,
+                        callsign=config.get("kit_callsign"),
                     )
                     system_status_latest = system_status
                     cot_xml = system_status.to_cot_xml()
@@ -1025,6 +1026,8 @@ if __name__ == "__main__":
         "tak_host": tak_host,
         "tak_port": tak_port,
         "tak_protocol": tak_protocol,
+        # Display name for the kit's own CoT marker; None means the kit id.
+        "kit_callsign": parse_kit_callsign(config_values.get("kit_callsign")),
         "tak_tls_p12": args.tak_tls_p12 if args.tak_tls_p12 is not None else get_str(config_values.get("tak_tls_p12")),
         "tak_tls_p12_pass": args.tak_tls_p12_pass if args.tak_tls_p12_pass is not None else get_str(config_values.get("tak_tls_p12_pass")),
         "tak_tls_certfile": args.tak_tls_certfile if args.tak_tls_certfile is not None else get_str(config_values.get("tak_tls_certfile")),
@@ -1171,6 +1174,8 @@ if __name__ == "__main__":
                 "enable_receive": bool(config.get("enable_receive")),
                 "multicast_interface": config.get("tak_multicast_interface"),
                 "multicast_ttl": config.get("multicast_ttl"),
+                # Configured value; None means the kit id is used.
+                "kit_callsign": config.get("kit_callsign"),
                 "tls": bool(
                     config.get("tak_tls_p12")
                     or (config.get("tak_tls_certfile") and config.get("tak_tls_keyfile"))

@@ -10,6 +10,7 @@ from .config import (
     get_float,
     get_bool,
     validate_config,
+    parse_kit_callsign,
 )
 from .cot_builder import (
     build_drone_cot,
