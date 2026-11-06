@@ -1285,6 +1285,7 @@ if __name__ == "__main__":
                 aircraft_enabled=bool(config.get("mqtt_aircraft_enabled", False)),
                 aircraft_topic=config.get("mqtt_aircraft_topic", "wardragon/aircraft"),
                 kit_id_provider=lambda: KIT_ID,
+                kit_callsign=config.get("kit_callsign"),
             )
             logger.info("MQTT sink enabled.")
             if bool(config.get("mqtt_ha_enabled")) and not bool(config.get("mqtt_per_drone_enabled")):
@@ -1328,6 +1329,7 @@ if __name__ == "__main__":
                         wardragon_hz=config.get("lattice_wd_rate", 0.2),
                         source_name=config.get("lattice_source_name", "DragonSync"),
                         sandbox_token=sb or None,
+                        kit_callsign=config.get("kit_callsign"),
                     )
                     logger.info("Lattice sink enabled.")
                 except Exception as e:

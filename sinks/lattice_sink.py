@@ -162,6 +162,7 @@ class LatticeSink:
         wardragon_hz: float = 0.2,
         source_name: str = "DragonSync",
         sandbox_token: Optional[str] = None,
+        kit_callsign: Optional[str] = None,
     ) -> None:
         if _IMPORT_ERROR is not None:
             raise RuntimeError(f"anduril SDK import failed: {_IMPORT_ERROR}") from _IMPORT_ERROR
@@ -170,6 +171,9 @@ class LatticeSink:
         base_url = (base_url or "").strip() or None
         self._sandbox_token = (sandbox_token or "").strip() or None
         self.source_name = source_name
+        # Display name for the kit entity's alias only; the entity id stays
+        # wardragon-<serial> so relationships and history keep pointing at it.
+        self.kit_callsign = (kit_callsign or "").strip() or None
 
         headers = {"anduril-sandbox-authorization": f"Bearer {self._sandbox_token}"} if self._sandbox_token else None
         token_arg = _lattice_token_arg(token)
@@ -213,6 +217,10 @@ class LatticeSink:
         return False
 
     # ───────────────────────────── WarDragon (ground sensor) ─────────────────────────────
+    def _kit_alias(self, serial: str) -> str:
+        """Display name for the kit entity: the callsign when set."""
+        return self.kit_callsign or f"WarDragon {serial}"
+
     def publish_system(self, s: Dict[str, Any]) -> None:
         """
         Publish WarDragon position as a Lattice asset entity.
@@ -251,7 +259,7 @@ class LatticeSink:
             return
 
         entity_id = f"wardragon-{serial}"
-        alias_name = f"WarDragon {serial}"
+        alias_name = self._kit_alias(serial)
 
         # Store system entity_id for use in entity relationships
         self._system_entity_id = entity_id

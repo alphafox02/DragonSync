@@ -92,12 +92,16 @@ class MqttSink:
         # one MQTT broker don't collide on retained state. Backward compatible:
         # if not provided, falls back to a "wardragon-unknown" placeholder.
         kit_id_provider: Optional[Callable[[], Optional[str]]] = None,
+        # Display name for the kit's Home Assistant device and tracker. Topics,
+        # identifiers and unique IDs keep using kit_id.
+        kit_callsign: Optional[str] = None,
     ) -> None:
         if mqtt is None:
             raise RuntimeError("paho-mqtt not installed but required for MqttSink")
 
         self.qos = int(qos)
         self.retain_state = bool(retain_state)
+        self.kit_callsign = (kit_callsign or "").strip() or None
 
         self.aggregate_topic = aggregate_topic or None
         self.per_drone_enabled = bool(per_drone_enabled)
@@ -990,6 +994,7 @@ class MqttSink:
 
             attrs = {
                 "id": f"wardragon-{serial}",
+                "callsign": self.kit_callsign or f"wardragon-{serial}",
                 "latitude": lat, "longitude": lon, "hae": alt,
                 "cpu_usage": cpu,
                 "memory_total_mb": round(mem_total_mb, 1),
@@ -1024,9 +1029,10 @@ class MqttSink:
         if not kit_id:
             return
 
+        kit_name = self.kit_callsign or f"WarDragon {kit_id}"
         device = {
             "identifiers": [f"{self.ha_device_base}:{kit_id}:system"],
-            "name": f"WarDragon {kit_id}",
+            "name": kit_name,
             "manufacturer": "CEMAXECUTER",
             "model": "WarDragon",
         }
@@ -1039,7 +1045,7 @@ class MqttSink:
         # device_tracker for kit GPS position
         dt_cfg_topic = f"{self.ha_prefix}/device_tracker/{unique_base}/config"
         dt_payload = {
-            "name": f"WarDragon {kit_id}",
+            "name": kit_name,
             "unique_id": unique_base,
             "device": device,
             "source_type": "gps",

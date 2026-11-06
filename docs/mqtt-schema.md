@@ -279,7 +279,8 @@ WarDragon kit telemetry published to **`wardragon/system/attrs`**. Source: `publ
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `id` | string | Kit ID (e.g. `wardragon-G6PA14100J63`) |
+| `id` | string | Kit ID (e.g. `wardragon-G6PA14100J63`). The kit's identity; use this to key on a kit. |
+| `callsign` | string | Display name from `kit_callsign`; the Kit ID when none is set. Do not key on it. |
 | `latitude` | float | Kit GPS latitude |
 | `longitude` | float | Kit GPS longitude |
 | `hae` | float | Kit altitude HAE (meters) |

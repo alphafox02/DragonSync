@@ -171,9 +171,9 @@ api_port = 8088
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `kit_callsign` | *(blank)* | Name shown on the kit's own marker in TAK. Blank uses the kit id (`wardragon-<serial>`). 1-32 letters, digits, spaces, `.`, `_` or `-`; an invalid value is logged and ignored. |
+| `kit_callsign` | *(blank)* | Display name for the kit. Blank uses the kit id (`wardragon-<serial>`). 1-32 letters, digits, spaces, `.`, `_` or `-`; an invalid value is logged and ignored. |
 
-The callsign is a display name only. The kit id stays the identity everywhere: the CoT uid, `SeenBy` in detection remarks, MQTT topics and Lattice entity ids. Anything that tracks a kit keeps working when the callsign changes. `/status` reports both `kit_id` and `callsign`.
+The callsign is a display name only. It is used for the kit's own marker in TAK, its Home Assistant device and tracker names, and its Lattice alias, and it is reported as `callsign` in `/status`, `/config` and the MQTT kit attrs. The kit id stays the identity everywhere: the CoT uid, `SeenBy` in detection remarks, MQTT topics, Home Assistant identifiers and unique IDs, and Lattice entity ids. Anything that tracks a kit keeps working when the callsign changes.
 
 ### Runtime Behavior
 
