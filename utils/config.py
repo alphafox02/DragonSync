@@ -33,7 +33,23 @@ def load_config(config_path: str) -> Dict[str, Any]:
         config.read(config_path)
         # Assuming configurations are under the 'SETTINGS' section
         if 'SETTINGS' in config:
-            return dict(config['SETTINGS'])
+            try:
+                return dict(config['SETTINGS'])
+            except configparser.InterpolationError as e:
+                # configparser reads % as interpolation, so a plain % in any
+                # value (a password, say) used to stop DragonSync here. Read
+                # the values literally instead. %% still means %, so every
+                # file that loaded before gives the same values as before.
+                # Name the key only: the parser's message quotes the value,
+                # which may be a password.
+                logger.warning(
+                    "%s: the value of '%s' contains a '%%' configparser cannot interpret. "
+                    "Reading values literally; write %%%% for a literal %% to silence this.",
+                    config_path, getattr(e, "option", "?"),
+                )
+                raw = configparser.ConfigParser(interpolation=None)
+                raw.read(config_path)
+                return {k: v.replace('%%', '%') for k, v in raw['SETTINGS'].items()}
         else:
             logger.warning(f"No 'SETTINGS' section found in {config_path}. Using empty configuration.")
             return {}
@@ -42,8 +58,8 @@ def load_config(config_path: str) -> Dict[str, Any]:
         sys.exit(1)
 
 # Display name for the kit's own CoT marker. Plain characters only: the value
-# lives in config.ini, where configparser treats % as interpolation, and it is
-# shown in TAK clients. It never changes the kit id (CoT uid, SeenBy, MQTT
+# lives in config.ini, where configparser treats % specially, and it is shown
+# in TAK clients. It never changes the kit id (CoT uid, SeenBy, MQTT
 # topics, Lattice ids), which stays wardragon-<serial>.
 KIT_CALLSIGN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._-]{0,31}$")
 
