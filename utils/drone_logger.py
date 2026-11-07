@@ -429,7 +429,7 @@ def main():
                 date_part = fname[len(os.path.basename(prefix)) : -len(ext or ".sqlite")]
                 try:
                     dt_obj = datetime.strptime(date_part, "%Y%m%d")
-                except Exception:
+                except ValueError:
                     continue
                 age_days = (datetime.utcnow() - dt_obj).days
                 if age_days > args.sqlite_retain_days:
